@@ -1,57 +1,84 @@
 import type { FastifyInstance } from "fastify";
-import { getPool } from "../../db/pool.js";
-
-type LogLine = { ts: string; level: "info" | "warn" | "error" | "debug"; source: string; message: string };
-
-const SOURCES = ["llama-swap", "router", "keda", "auth"] as const;
-const LEVEL_BY_SOURCE: Record<string, LogLine["level"]> = {
-  "llama-swap": "info",
-  router: "debug",
-  keda: "info",
-  auth: "info",
-};
+import { configuredLogSource, tailReplicaLogs, type LogLine } from "../../logs/sources.js";
+import { writeSseHead } from "../sse.js";
 
 /**
- * PRD §6.10 — dashboard shows live-tailed pod stdout via the Kubernetes API,
- * per replica; no log aggregation backend in v1. Since there's no live K8s
- * pod to tail here, this endpoint synthesizes a plausible line derived from
- * actual current router state (replica status, queue depth) on an interval,
- * over SSE — the wiring point for a real `kubectl logs -f`-equivalent stream
- * is this same endpoint's handler.
+ * PRD §6.10 — live-tailed replica stdout, streamed to the dashboard over SSE.
+ *
+ * The lines are the container's own output. When they cannot be obtained the
+ * stream says so and closes, rather than filling the panel with anything
+ * generated here: an operator reading this view during an incident has to be
+ * able to trust that what they see is what the replica actually said.
  */
 export function registerLogRoutes(app: FastifyInstance) {
   app.get("/api/logs/:replicaId", async (request, reply) => {
     const { replicaId } = request.params as { replicaId: string };
-    reply.raw.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
+    const tail = Number((request.query as { tail?: string }).tail ?? 50) || 50;
+
+    writeSseHead(reply);
+
+    const write = (line: LogLine) => {
+      if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(line)}\n\n`);
+    };
+
+    /** Reports a problem in-band so the panel can explain itself. */
+    const fail = (message: string) => {
+      write({
+        ts: new Date().toISOString(),
+        level: "error",
+        source: "controldeck",
+        message,
+      });
+      reply.raw.end();
+    };
+
+    let stream: Awaited<ReturnType<typeof tailReplicaLogs>> | null = null;
+    let closed = false;
+
+    request.raw.on("close", () => {
+      closed = true;
+      stream?.cancel();
     });
 
-    const pool = getPool();
-    const send = (line: LogLine) => reply.raw.write(`data: ${JSON.stringify(line)}\n\n`);
+    try {
+      stream = await tailReplicaLogs(replicaId, write, { tail });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      return fail(
+        `Could not attach to logs for ${replicaId} (source: ${configuredLogSource()}). ${detail}`
+      );
+    }
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await pool.query(
-          `SELECT status, in_flight AS "inFlight", tokens_per_sec AS "tokensPerSec" FROM replicas WHERE id = $1`,
-          [replicaId]
-        );
-        const replica = res.rows[0];
-        if (!replica) return;
-        const source = SOURCES[Math.floor(Math.random() * SOURCES.length)];
-        const messages: Record<string, string> = {
-          "llama-swap": `replica ${replicaId} status=${replica.status} in_flight=${replica.inFlight}${replica.tokensPerSec ? ` tokens/s=${replica.tokensPerSec}` : ""}`,
-          router: `heartbeat for ${replicaId}: readiness poll ok`,
-          keda: `scaledObject watch tick for replica owner of ${replicaId}`,
-          auth: `no auth events for ${replicaId} in this interval`,
-        };
-        send({ ts: new Date().toISOString(), level: LEVEL_BY_SOURCE[source], source, message: messages[source] });
-      } catch {
-        // replica may have been deleted; keep the stream alive
+    // Keeps intermediate proxies from dropping a stream that is simply quiet.
+    const keepAlive = setInterval(() => {
+      if (!reply.raw.writableEnded) reply.raw.write(": keep-alive\n\n");
+    }, 20_000);
+
+    try {
+      await stream.done;
+      if (!closed) {
+        write({
+          ts: new Date().toISOString(),
+          level: "warn",
+          source: "controldeck",
+          message: "Log stream ended — the replica may have been restarted or scaled down.",
+        });
       }
-    }, 2000);
+    } catch (err) {
+      if (!closed) {
+        const detail = err instanceof Error ? err.message : String(err);
+        write({
+          ts: new Date().toISOString(),
+          level: "error",
+          source: "controldeck",
+          message: `Log stream failed: ${detail}`,
+        });
+      }
+    } finally {
+      clearInterval(keepAlive);
+      if (!reply.raw.writableEnded) reply.raw.end();
+    }
 
-    request.raw.on("close", () => clearInterval(interval));
+    return reply;
   });
 }

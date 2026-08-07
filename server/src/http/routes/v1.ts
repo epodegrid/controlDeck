@@ -19,6 +19,7 @@ import type { LlamaSwapClient } from "../../adapters/llama-swap.js";
 import { statusForError, replicaUnavailable, queueTimeoutError } from "../errors.js";
 import type { ChatCompletionRequest, StandardError } from "../../types.js";
 import { createAuthPreHandler } from "../auth-middleware.js";
+import { writeSseHead } from "../sse.js";
 import type { JWKSSource } from "../../auth/index.js";
 
 const PLACEMENT_RETRY_MS = 200;
@@ -113,11 +114,7 @@ export function registerV1Routes(
     const promptText = body.messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
 
     if (body.stream) {
-      reply.raw.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-        connection: "keep-alive",
-      });
+      writeSseHead(reply);
 
       let outputTokens = 0;
       let fullText = "";

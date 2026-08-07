@@ -160,6 +160,9 @@ All shared state lives in Postgres, which is what lets the router run multiple r
 | `MODEL_BACKEND` | auto | `http` for real backends, `fake` for an in-process stub |
 | `MODEL_ENDPOINT_<MODEL_ID>` | — | Base address for a model, e.g. `MODEL_ENDPOINT_ORNITH_35B` |
 | `MODEL_REPLICAS_<MODEL_ID>` | — | Comma-separated per-replica addresses; takes precedence |
+| `LOG_SOURCE` | auto | `kubernetes`, `endpoint`, or `none`. Auto-detects in-cluster |
+| `THROUGHPUT_FRESH_MS` | `120000` | How long a replica's measured tokens/sec is trusted |
+| `TOKENS_PER_SEC_ALPHA` | `0.3` | Weight of the newest throughput sample |
 | `QUEUE_TIMEOUT_MS` | `300000` | Queue-wait clock (§6.5) |
 | `STALL_TIMEOUT_MS` | `60000` | Inactivity clock — time since the last token |
 | `REPLICA_RECONCILE_INTERVAL_MS` | `5000` | Readiness probe interval |
@@ -303,6 +306,34 @@ curl localhost:5001/_stats
 ```
 
 Configure via `MODEL_ID`, `CAPABILITIES`, `TOKENS_PER_SEC`, `LOAD_DELAY_MS`, `MAX_CONCURRENCY`, `REPLY_MIN_TOKENS`, `REPLY_MAX_TOKENS`, `EMBEDDING_DIM`.
+
+---
+
+## Logs and throughput-aware routing
+
+**Logs** are the replica's own stdout (PRD §6.10), from one of two sources:
+
+- `kubernetes` — the pod log endpoint, used in-cluster. Needs `get` on
+  `pods/log` in the namespace.
+- `endpoint` — the replica's own `/logs` stream, used in local development
+  where there is no Kubernetes to ask.
+
+When neither is available the panel says so and closes the stream. It never
+substitutes generated lines: an operator triaging a crash-looping replica has
+to be able to trust that what they read is what the replica said.
+
+**Throughput-aware placement.** Every completed request contributes its
+observed tokens/sec to a moving average per replica. Placement keeps
+least-loaded as the primary key (§6.4) and uses throughput only to break ties,
+so a fleet on uneven hardware — or a node quietly throttling — sends work where
+it will finish soonest.
+
+Measurements expire after `THROUGHPUT_FRESH_MS`, and an expired reading counts
+as unknown, which sorts first. That expiry is load-bearing: without it the
+preference feeds on itself, and a replica that records one slow period stops
+receiving requests, so it never records a better one. Testing a
+throttled-then-restored replica showed exactly that — zero traffic afterwards
+while it reported healthy.
 
 ---
 

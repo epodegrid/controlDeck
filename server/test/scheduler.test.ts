@@ -178,6 +178,82 @@ describe("scheduler", () => {
       }
     });
 
+    it("prefers the faster replica when load is equal", async () => {
+      // §6.4 keeps least-loaded as the primary key; throughput only breaks
+      // ties. Both are idle here, so the measured-faster one should win.
+      await insertReplica("t-slow", MODEL_ID, "ready", 0, 0, 4);
+      await insertReplica("t-fast", MODEL_ID, "ready", 0, 0, 4);
+      const pool = getPool();
+      await pool.query("UPDATE replicas SET tokens_per_sec = 12, tokens_per_sec_at = now() WHERE id = 't-slow'");
+      await pool.query("UPDATE replicas SET tokens_per_sec = 48, tokens_per_sec_at = now() WHERE id = 't-fast'");
+
+      const result = await placeRequest(MODEL_ID);
+      expect(result.ok && result.replica.id).toBe("t-fast");
+    });
+
+    it("never lets throughput override load balancing", async () => {
+      // The fast replica is already busy. Sending yet more work to it because
+      // it is fast would defeat least-loaded placement entirely.
+      await insertReplica("t-fast-busy", MODEL_ID, "ready", 2, 0, 4);
+      await insertReplica("t-slow-idle", MODEL_ID, "ready", 0, 0, 4);
+      const pool = getPool();
+      await pool.query("UPDATE replicas SET tokens_per_sec = 90, tokens_per_sec_at = now() WHERE id = 't-fast-busy'");
+      await pool.query("UPDATE replicas SET tokens_per_sec = 10, tokens_per_sec_at = now() WHERE id = 't-slow-idle'");
+
+      const result = await placeRequest(MODEL_ID);
+      expect(result.ok && result.replica.id).toBe("t-slow-idle");
+    });
+
+    it("tries an unmeasured replica ahead of a measured one", async () => {
+      // A freshly scaled replica has no throughput figure yet. Ranking it last
+      // would starve it of the traffic it needs to earn one.
+      await insertReplica("t-known", MODEL_ID, "ready", 0, 0, 4);
+      await insertReplica("t-new", MODEL_ID, "ready", 0, 0, 4);
+      await getPool().query(
+        "UPDATE replicas SET tokens_per_sec = 99, tokens_per_sec_at = now() WHERE id = 't-known'"
+      );
+
+      const result = await placeRequest(MODEL_ID);
+      expect(result.ok && result.replica.id).toBe("t-new");
+    });
+
+    it("re-explores a replica whose throughput reading has gone stale", async () => {
+      // The starvation case, found by testing rather than reasoning: a replica
+      // throttled and then restored received zero traffic afterwards, because
+      // its stale slow score kept it ranked last and it never got a request
+      // with which to record a better one. A measurement older than the
+      // freshness window must count as unknown, and unknown is tried first.
+      await insertReplica("s-fast", MODEL_ID, "ready", 0, 0, 4);
+      await insertReplica("s-stale", MODEL_ID, "ready", 0, 0, 4);
+      const pool = getPool();
+      await pool.query(
+        "UPDATE replicas SET tokens_per_sec = 90, tokens_per_sec_at = now() WHERE id = 's-fast'"
+      );
+      await pool.query(
+        "UPDATE replicas SET tokens_per_sec = 5, tokens_per_sec_at = now() - interval '1 hour' WHERE id = 's-stale'"
+      );
+
+      const result = await placeRequest(MODEL_ID);
+      expect(result.ok && result.replica.id).toBe("s-stale");
+    });
+
+    it("still trusts a recent slow measurement", async () => {
+      // The flip side: expiry must not make the preference meaningless. A
+      // freshly-measured slow replica should still lose to a fast one.
+      await insertReplica("s-fast-2", MODEL_ID, "ready", 0, 0, 4);
+      await insertReplica("s-slow-2", MODEL_ID, "ready", 0, 0, 4);
+      const pool = getPool();
+      await pool.query(
+        "UPDATE replicas SET tokens_per_sec = 90, tokens_per_sec_at = now() WHERE id = 's-fast-2'"
+      );
+      await pool.query(
+        "UPDATE replicas SET tokens_per_sec = 5, tokens_per_sec_at = now() WHERE id = 's-slow-2'"
+      );
+
+      const result = await placeRequest(MODEL_ID);
+      expect(result.ok && result.replica.id).toBe("s-fast-2");
+    });
+
     it("distributes many concurrent placements across replicas without over-loading any single one", async () => {
       const replicaIds = ["c-1", "c-2", "c-3", "c-4"];
       for (const id of replicaIds) {
@@ -372,6 +448,64 @@ describe("scheduler", () => {
 
       const { rows } = await getPool().query("SELECT status FROM requests WHERE id = $1", [id]);
       expect(rows[0].status).toBe("streaming");
+    });
+
+    it("records observed throughput on the replica when a request completes", async () => {
+      await insertReplica("tps-1", MODEL_ID, "ready", 1, 0, 4);
+      const id = randomUUID();
+      // 100 tokens over ~1s of generation.
+      await insertRequestRow(id, {
+        status: "streaming",
+        replicaId: "tps-1",
+        startedAt: "now() - interval '1 second'",
+      });
+
+      await completeRequest(id, { outputTokens: 100, costUsd: 0.01 });
+
+      const { rows } = await getPool().query(
+        "SELECT tokens_per_sec, tokens_per_sec_at FROM replicas WHERE id = 'tps-1'"
+      );
+      expect(rows[0].tokens_per_sec_at).not.toBeNull();
+      // First sample seeds the average directly, so ~100 tok/s.
+      expect(Number(rows[0].tokens_per_sec)).toBeGreaterThan(60);
+      expect(Number(rows[0].tokens_per_sec)).toBeLessThan(140);
+    });
+
+    it("moves the average toward a new sample without jumping to it", async () => {
+      await insertReplica("tps-2", MODEL_ID, "ready", 1, 0, 4);
+      await getPool().query(
+        "UPDATE replicas SET tokens_per_sec = 10, tokens_per_sec_at = now() WHERE id = 'tps-2'"
+      );
+
+      const id = randomUUID();
+      await insertRequestRow(id, {
+        status: "streaming",
+        replicaId: "tps-2",
+        startedAt: "now() - interval '1 second'",
+      });
+      await completeRequest(id, { outputTokens: 100, costUsd: 0.01 });
+
+      const { rows } = await getPool().query("SELECT tokens_per_sec FROM replicas WHERE id = 'tps-2'");
+      const tps = Number(rows[0].tokens_per_sec);
+      // Weighted, not replaced: above the old 10, well below the new ~100.
+      expect(tps).toBeGreaterThan(10);
+      expect(tps).toBeLessThan(60);
+    });
+
+    it("ignores samples too small to mean anything", async () => {
+      // A request that emitted two tokens in a few milliseconds implies an
+      // absurd tokens/sec; letting it in would wreck the average.
+      await insertReplica("tps-3", MODEL_ID, "ready", 1, 0, 4);
+      await getPool().query(
+        "UPDATE replicas SET tokens_per_sec = 40, tokens_per_sec_at = now() WHERE id = 'tps-3'"
+      );
+
+      const id = randomUUID();
+      await insertRequestRow(id, { status: "streaming", replicaId: "tps-3", startedAt: "now()" });
+      await completeRequest(id, { outputTokens: 2, costUsd: 0.01 });
+
+      const { rows } = await getPool().query("SELECT tokens_per_sec FROM replicas WHERE id = 'tps-3'");
+      expect(Number(rows[0].tokens_per_sec)).toBe(40);
     });
 
     it("markStreamStarted sets streaming status and timestamps", async () => {

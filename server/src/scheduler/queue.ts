@@ -7,6 +7,17 @@ export const QUEUE_TIMEOUT_MS = Number(process.env.QUEUE_TIMEOUT_MS ?? 300_000);
 /** PRD §6.5 — stall/inactivity timeout default: 60 seconds. */
 export const STALL_TIMEOUT_MS = Number(process.env.STALL_TIMEOUT_MS ?? 60_000);
 
+/**
+ * Weight given to the newest throughput sample when updating a replica's
+ * running tokens/sec. 0.3 settles within roughly ten requests while still
+ * moving quickly when a replica's real speed changes.
+ */
+export const EWMA_ALPHA = Number(process.env.TOKENS_PER_SEC_ALPHA ?? 0.3);
+
+/** Samples shorter or smaller than these are too noisy to learn from. */
+const MIN_SAMPLE_DURATION_MS = 250;
+const MIN_SAMPLE_TOKENS = 5;
+
 export type EnqueueRequestInput = {
   id: string;
   callerOid: string;
@@ -170,9 +181,42 @@ export async function completeRequest(requestId: string, input: CompleteRequestI
 
     const replicaId = rows[0]?.replica_id ?? null;
     if (replicaId) {
+      // Fold this request's observed throughput into the replica's running
+      // average, so placement can prefer genuinely faster hardware (§6.4).
+      //
+      // An exponentially weighted average rather than a lifetime mean: a
+      // replica that degrades — thermal throttling, a noisy neighbour, a
+      // larger model swapped in — has to be reflected within a few requests,
+      // not diluted by a thousand historical ones. EWMA_ALPHA is the weight
+      // given to the newest sample.
+      //
+      // Guarded on duration and token count because a request that emitted one
+      // token in two milliseconds says nothing useful about sustained speed
+      // and would badly skew the average.
       await client.query(
-        `UPDATE replicas SET in_flight = GREATEST(0, in_flight - 1), updated_at = now() WHERE id = $1`,
-        [replicaId]
+        `UPDATE replicas r
+         SET in_flight = GREATEST(0, r.in_flight - 1),
+             tokens_per_sec = CASE
+               WHEN req.duration_ms >= $3 AND req.output_tokens >= $4 THEN
+                 CASE
+                   WHEN r.tokens_per_sec IS NULL
+                     THEN req.output_tokens::numeric / (req.duration_ms::numeric / 1000)
+                   ELSE
+                     (1 - $5::numeric) * r.tokens_per_sec
+                     + $5::numeric * (req.output_tokens::numeric / (req.duration_ms::numeric / 1000))
+                 END
+               ELSE r.tokens_per_sec
+             END,
+             -- Stamp only when a sample was actually taken, so the freshness
+             -- window measures the age of the measurement rather than of the row.
+             tokens_per_sec_at = CASE
+               WHEN req.duration_ms >= $3 AND req.output_tokens >= $4 THEN now()
+               ELSE r.tokens_per_sec_at
+             END,
+             updated_at = now()
+         FROM requests req
+         WHERE r.id = $1 AND req.id = $2`,
+        [replicaId, requestId, MIN_SAMPLE_DURATION_MS, MIN_SAMPLE_TOKENS, EWMA_ALPHA]
       );
     }
 

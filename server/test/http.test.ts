@@ -44,6 +44,34 @@ afterAll(async () => {
 });
 
 describe("HTTP API", () => {
+  it("streaming responses carry CORS headers", async () => {
+    // Writing to reply.raw bypasses Fastify's reply object, which silently
+    // dropped the headers @fastify/cors had set. The stream was perfectly
+    // healthy to curl and rejected by EventSource, so every server-side check
+    // passed while the dashboard's log panel sat empty.
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: `Bearer ${token}`, origin: "http://localhost:3000" },
+      payload: { stream: true, messages: [{ role: "user", content: "hi" }] },
+    });
+
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+    expect(res.headers["access-control-allow-origin"]).toBeDefined();
+  });
+
+  it("the log stream carries CORS headers too", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/logs/does-not-exist",
+      headers: { origin: "http://localhost:3000" },
+    });
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+    expect(res.headers["access-control-allow-origin"]).toBeDefined();
+    // And it explains itself rather than inventing lines.
+    expect(res.body).toMatch(/Could not attach to logs/);
+  });
+
   it("healthz responds ok", async () => {
     const res = await app.inject({ method: "GET", url: "/healthz" });
     expect(res.statusCode).toBe(200);

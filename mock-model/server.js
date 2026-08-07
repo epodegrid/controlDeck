@@ -45,6 +45,32 @@ const state = {
 const stats = { chat: 0, embeddings: 0, stalled: 0, errored: 0, rejected: 0 };
 let inFlight = 0;
 
+/**
+ * Real stdout, kept in a ring buffer and streamable over /logs.
+ *
+ * A container's logs normally come from the platform — `kubectl logs` or the
+ * Docker API. Exposing them over HTTP as well means the gateway can tail a
+ * replica in local development, where there is no Kubernetes to ask, without
+ * anyone having to invent log lines to fill the panel.
+ */
+const LOG_BUFFER_MAX = 500;
+const logBuffer = [];
+const logSubscribers = new Set();
+
+function emit(level, message) {
+  const line = { ts: new Date().toISOString(), level, source: MODEL_ID, message };
+  logBuffer.push(line);
+  if (logBuffer.length > LOG_BUFFER_MAX) logBuffer.shift();
+  for (const send of logSubscribers) {
+    try {
+      send(line);
+    } catch {
+      // A subscriber that has gone away is cleaned up by its own close handler.
+    }
+  }
+  console.log(`[${line.level}] ${message}`);
+}
+
 const isReady = () => state.forceReady || Date.now() >= state.readyAt;
 
 function json(res, code, body) {
@@ -139,16 +165,19 @@ async function handleChat(req, res, body) {
 
   if (inFlight >= state.maxConcurrency) {
     stats.rejected += 1;
+    emit("warn", `rejected: at concurrency limit ${state.maxConcurrency}`);
     return apiError(res, 503, "capacity_error", "replica_unavailable",
       `Replica for "${MODEL_ID}" is at its concurrency limit (${state.maxConcurrency}).`);
   }
   if (Math.random() < state.errorProbability) {
+    emit("error", "injected fault: generation failed");
     return apiError(res, 500, "server_error", "replica_unavailable",
       `Injected fault: replica for "${MODEL_ID}" failed to generate.`);
   }
 
   inFlight += 1;
   stats.chat += 1;
+  emit("info", `chat request accepted, in_flight=${inFlight}/${state.maxConcurrency}`);
   const tokens = buildReply(promptTextOf(messages));
   const perTokenMs = 1000 / Math.max(1, state.tokensPerSec);
   // Roll the stall dice once up front, then pick a cut-off partway through so
@@ -170,6 +199,7 @@ async function handleChat(req, res, body) {
           // PRD §6.5 clock #2: go silent while holding the connection open.
           // The router's inactivity sweep is what must notice this.
           stats.stalled += 1;
+          emit("warn", `generation stalled after ${i} tokens; holding the connection open`);
           return; // `finally` keeps the socket open by design.
         }
         await sleep(perTokenMs);
@@ -210,6 +240,7 @@ async function handleChat(req, res, body) {
     });
   } finally {
     inFlight -= 1;
+    emit("debug", `request finished, in_flight=${inFlight}/${state.maxConcurrency}`);
   }
 }
 
@@ -224,6 +255,7 @@ async function handleEmbeddings(req, res, body) {
 
   stats.embeddings += 1;
   const inputs = Array.isArray(body.input) ? body.input : [body.input];
+  emit("info", `embedding request for ${inputs.length} input(s)`);
   // Deterministic per input text, so repeated calls are comparable.
   const data = inputs.map((text, index) => {
     const seed = Array.from(String(text)).reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
@@ -263,6 +295,35 @@ const server = createServer(async (req, res) => {
       object: "list",
       data: [{ id: MODEL_ID, object: "model", capabilities: CAPABILITIES }],
     });
+  }
+
+  // Live stdout. Replays the buffered tail first so a viewer joining mid-life
+  // sees context rather than an empty panel, then streams new lines as they
+  // happen. This is the local-development equivalent of `kubectl logs -f`.
+  if (req.method === "GET" && path === "/logs") {
+    const tail = Math.min(Number(url.searchParams.get("tail") ?? 50) || 50, LOG_BUFFER_MAX);
+    const follow = url.searchParams.get("follow") !== "false";
+
+    if (!follow) {
+      return json(res, 200, { lines: logBuffer.slice(-tail) });
+    }
+
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      connection: "keep-alive",
+    });
+    const send = (line) => res.write(`data: ${JSON.stringify(line)}\n\n`);
+    for (const line of logBuffer.slice(-tail)) send(line);
+
+    logSubscribers.add(send);
+    // A comment frame every 20s keeps proxies from closing an idle stream.
+    const keepAlive = setInterval(() => res.write(": keep-alive\n\n"), 20000);
+    req.on("close", () => {
+      logSubscribers.delete(send);
+      clearInterval(keepAlive);
+    });
+    return;
   }
 
   if (req.method === "GET" && (path === "/_stats" || path === "/_control")) {
@@ -314,9 +375,19 @@ server.headersTimeout = 0;
 server.setTimeout(0);
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `[mock-model] ${MODEL_ID} listening on :${PORT} ` +
-      `caps=${CAPABILITIES.join("|")} tps=${state.tokensPerSec} ` +
-      `maxConc=${state.maxConcurrency} readyIn=${Math.max(0, state.readyAt - Date.now())}ms`
+  emit(
+    "info",
+    `${MODEL_ID} listening on :${PORT} caps=${CAPABILITIES.join("|")} ` +
+      `tps=${state.tokensPerSec} maxConc=${state.maxConcurrency} ` +
+      `readyIn=${Math.max(0, state.readyAt - Date.now())}ms`
   );
+
+  // Weight loading is the thing an operator is usually watching for.
+  const readyIn = state.readyAt - Date.now();
+  if (readyIn > 0) {
+    emit("info", `loading model weights, expected ready in ${Math.round(readyIn / 1000)}s`);
+    setTimeout(() => emit("info", "model weights loaded, ready to serve"), readyIn);
+  } else {
+    emit("info", "model weights loaded, ready to serve");
+  }
 });
