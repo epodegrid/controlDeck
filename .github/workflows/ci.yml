@@ -116,3 +116,49 @@ jobs:
       - name: Container logs on failure
         if: failure()
         run: docker compose logs --tail=100
+
+  images:
+    name: Images & chart build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build without pushing. A Dockerfile that has quietly stopped building
+      # is only discovered at release time otherwise, which is the worst moment
+      # to find out. amd64 only here — the release workflow does multi-arch.
+      - name: Build router
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          push: false
+          cache-from: type=gha,scope=controldeck-router
+          cache-to: type=gha,mode=max,scope=controldeck-router
+
+      - name: Build dashboard
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha,scope=controldeck-dashboard
+          cache-to: type=gha,mode=max,scope=controldeck-dashboard
+
+      - name: Build mock-model
+        uses: docker/build-push-action@v6
+        with:
+          context: ./mock-model
+          push: false
+          cache-from: type=gha,scope=controldeck-mock-model
+          cache-to: type=gha,mode=max,scope=controldeck-mock-model
+
+      - uses: azure/setup-helm@v4
+
+      # Catches a chart that renders invalid YAML, and the mock-model path that
+      # only a minikube user would otherwise exercise.
+      - name: Lint and render the chart
+        run: |
+          helm dependency build helm/controldeck
+          helm lint helm/controldeck
+          helm template controldeck helm/controldeck > /dev/null
+          helm template controldeck helm/controldeck --set mockModels.enabled=true > /dev/null

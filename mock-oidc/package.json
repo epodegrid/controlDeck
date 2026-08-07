@@ -4,5 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Dependency-free Entra-shaped OIDC provider for testing the dashboard sign-in flow without a tenant.",
-  "scripts": { "start": "node server.js" }
+  "scripts": {
+    "start": "node server.js"
+  }
 }

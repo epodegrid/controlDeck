@@ -49,3 +49,6 @@ next-env.d.ts
 /playwright-report/
 /blob-report/
 /.playwright-mcp/
+
+# helm — the lock is committed for reproducibility, the vendored subchart is not
+helm/**/charts/

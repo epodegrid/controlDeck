@@ -23,7 +23,7 @@ spec:
         # Mock fleet: same HTTP surface and readiness contract as llama-swap,
         # no weights. See mockModels in values.yaml.
         - name: mock-model
-          image: "{{ $.Values.mockModels.image.repository }}:{{ $.Values.mockModels.image.tag }}"
+          image: "{{ $.Values.mockModels.image.repository }}:{{ $.Values.mockModels.image.tag | default $.Chart.AppVersion }}"
           imagePullPolicy: {{ $.Values.mockModels.image.pullPolicy }}
           env:
             - name: MODEL_ID

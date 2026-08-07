@@ -6,8 +6,10 @@
 
 router:
   image:
-    repository: ghcr.io/your-org/controldeck-router
-    tag: "0.1.0"
+    repository: ghcr.io/epodegrid/controldeck-router
+    # Empty means "use the chart's appVersion", so upgrading the chart moves
+    # the images with it. Override only to pin a specific build.
+    tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 2 # HA — router state lives in Postgres, not in-memory (PRD §8)
   port: 4000
@@ -25,8 +27,8 @@ router:
 
 dashboard:
   image:
-    repository: ghcr.io/your-org/controldeck-dashboard
-    tag: "0.1.0"
+    repository: ghcr.io/epodegrid/controldeck-dashboard
+    tag: ""
     pullPolicy: IfNotPresent
   replicaCount: 2
   port: 3000
@@ -51,8 +53,8 @@ dashboard:
 mockModels:
   enabled: false
   image:
-    repository: controldeck/mock-model
-    tag: "0.1.0"
+    repository: ghcr.io/epodegrid/controldeck-mock-model
+    tag: ""
     # IfNotPresent so an image side-loaded onto the node (minikube image load,
     # or a build against the node's docker daemon) is used as-is rather than
     # pulled from a registry that may not be reachable.

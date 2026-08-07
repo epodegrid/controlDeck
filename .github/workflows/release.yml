@@ -1,0 +1,166 @@
+name: Release
+
+# Releases are driven by git tags. Pushing `v0.2.0` publishes the images and
+# the chart at 0.2.0 — there is no separate "publish" button and no bot commit,
+# so the tag is the single record of what was released.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write # create the GitHub Release
+  packages: write # push images + chart to GHCR
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  verify:
+    name: Verify tag matches versions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The chart's appVersion selects the image tags. If it disagrees with the
+      # tag being released, the chart would deploy images from a different
+      # release — so refuse rather than publish something incoherent.
+      - id: v
+        name: Check every version agrees with the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION"
+
+          fail=0
+          check() {
+            if [ "$2" != "$VERSION" ]; then
+              echo "::error::$1 is $2, expected $VERSION"
+              fail=1
+            else
+              echo "  ok  $1"
+            fi
+          }
+
+          check package.json            "$(node -p "require('./package.json').version")"
+          check server/package.json     "$(node -p "require('./server/package.json').version")"
+          check mock-model/package.json "$(node -p "require('./mock-model/package.json').version")"
+          check mock-oidc/package.json  "$(node -p "require('./mock-oidc/package.json').version")"
+          check "Chart version"         "$(grep -E '^version:'    helm/controldeck/Chart.yaml | awk '{print $2}')"
+          check "Chart appVersion"      "$(grep -E '^appVersion:' helm/controldeck/Chart.yaml | tr -d '"' | awk '{print $2}')"
+
+          if [ "$fail" = "1" ]; then
+            echo "::error::Run 'node scripts/set-version.mjs $VERSION', commit, and re-tag."
+            exit 1
+          fi
+
+  images:
+    name: ${{ matrix.image }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: controldeck-router
+            context: ./server
+          - image: controldeck-dashboard
+            context: .
+          # Published because the chart references it: mockModels.enabled swaps
+          # it in for llama-swap so the platform can be installed on a cluster
+          # with no model hardware.
+          - image: controldeck-mock-model
+            context: ./mock-model
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          # Releases must run wherever an operator deploys them: amd64 for AKS,
+          # arm64 for anyone on Apple Silicon running minikube. Dev builds on
+          # main stay amd64-only, where the extra emulation time buys nothing.
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  chart:
+    name: Helm chart
+    needs: [verify, images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+
+      - name: Package and push
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          helm registry login ${{ env.REGISTRY }} \
+            -u ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
+          helm dependency build helm/controldeck
+          helm package helm/controldeck --version "$VERSION" --app-version "$VERSION" -d dist
+          # Charts live in the same registry as the images they deploy, so a
+          # mirror or pull-through proxy only has to be pointed at one place.
+          helm push "dist/controldeck-$VERSION.tgz" \
+            "oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helm-chart
+          path: dist/*.tgz
+
+  release:
+    name: GitHub Release
+    needs: [verify, images, chart]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: helm-chart
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tgz
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```bash
+            helm install controldeck \
+              oci://ghcr.io/${{ github.repository_owner }}/charts/controldeck \
+              --version ${{ needs.verify.outputs.version }}
+            ```
+
+            ### Images
+
+            - `ghcr.io/${{ github.repository_owner }}/controldeck-router:${{ needs.verify.outputs.version }}`
+            - `ghcr.io/${{ github.repository_owner }}/controldeck-dashboard:${{ needs.verify.outputs.version }}`
+            - `ghcr.io/${{ github.repository_owner }}/controldeck-mock-model:${{ needs.verify.outputs.version }}`
+
+            All `linux/amd64` and `linux/arm64`.

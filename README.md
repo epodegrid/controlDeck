@@ -203,6 +203,34 @@ Two things worth knowing up front:
 
 ## Deploying
 
+Images and the chart are published to GHCR on every tagged release:
+
+```bash
+helm install controldeck \
+  oci://ghcr.io/epodegrid/charts/controldeck --version 0.1.0 \
+  --set router.env.ENTRA_JWKS_URI="https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys" \
+  --set router.env.ENTRA_ISSUER="https://login.microsoftonline.com/<tenant>/v2.0" \
+  --set dashboard.env.DASHBOARD_ENTRA_TENANT_ID="<tenant>" \
+  --set dashboard.env.DASHBOARD_ENTRA_CLIENT_ID="<client-id>"
+```
+
+| Image | Purpose |
+|---|---|
+| `ghcr.io/epodegrid/controldeck-router` | Router / API tier |
+| `ghcr.io/epodegrid/controldeck-dashboard` | Dashboard |
+| `ghcr.io/epodegrid/controldeck-mock-model` | Mock replica, for clusters with no model hardware |
+
+All published for `linux/amd64` and `linux/arm64`.
+
+Image tags default to the chart's `appVersion`, so upgrading the chart moves
+the images with it. Pin a specific build with `--set router.image.tag=...`.
+
+For an air-gapped environment, mirror those three images and the chart into
+your internal registry and point `*.image.repository` at it — nothing else
+reaches outside at runtime except the JWKS endpoint you configure.
+
+### From a checkout
+
 ```bash
 helm dependency build ./helm/controldeck
 helm upgrade --install controldeck ./helm/controldeck \
@@ -227,6 +255,31 @@ helm upgrade --install controldeck ./helm/controldeck --set mockModels.enabled=t
 ### Dashboard edits vs. GitOps
 
 Dashboard changes are written to `model_registry_overrides` and merged on top of the Helm base config at read time. A Helm redeploy never clobbers them, and the Models view marks which fields are overridden. Helm wins on genuine field conflicts (§6.2, §11).
+
+---
+
+## Releasing
+
+Versions are driven by git tags. One command sets the version everywhere — both
+`package.json` files, the mock services, and the chart's `version` and
+`appVersion` — because the chart's `appVersion` selects the image tags, and a
+chart that disagrees with its images is a bad afternoon:
+
+```bash
+node scripts/set-version.mjs 0.2.0
+git commit -am "Release 0.2.0"
+git tag v0.2.0
+git push --follow-tags
+```
+
+The release workflow then verifies every version matches the tag (and refuses
+to publish if not), builds and pushes the three images multi-arch, packages and
+pushes the chart to GHCR, and opens a GitHub Release with generated notes.
+
+Every push and PR runs the CI workflow: server tests, dashboard typecheck and
+build, Playwright e2e in production auth mode, plus an image build and
+`helm lint`/`template` so a broken Dockerfile or chart is caught before release
+rather than during it.
 
 ---
 
