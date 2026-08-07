@@ -121,6 +121,8 @@ jobs:
         run: |
           helm registry login ${{ env.REGISTRY }} \
             -u ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
           helm dependency build helm/controldeck
           helm package helm/controldeck --version "$VERSION" --app-version "$VERSION" -d dist
           # Charts live in the same registry as the images they deploy, so a

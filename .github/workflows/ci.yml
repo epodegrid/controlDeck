@@ -158,6 +158,11 @@ jobs:
       # only a minikube user would otherwise exercise.
       - name: Lint and render the chart
         run: |
+          # Chart.lock pins the Postgres subchart, but the repo alias still has
+          # to be resolvable before `dependency build` can fetch it. A fresh
+          # runner has no repos configured.
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
           helm dependency build helm/controldeck
           helm lint helm/controldeck
           helm template controldeck helm/controldeck > /dev/null
