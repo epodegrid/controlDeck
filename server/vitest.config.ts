@@ -1,6 +1,11 @@
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  // Vite searches upward for a PostCSS config and finds the dashboard's at the
+  // repo root, then fails because @tailwindcss/postcss is a dashboard
+  // dependency this project does not install. Supplying an empty config stops
+  // the search; the router has no stylesheets to process anyway.
+  css: { postcss: { plugins: [] } },
   test: {
     environment: "node",
     globals: false,

@@ -40,7 +40,6 @@
     "node_modules",
     "server",
     "mock-model",
-    "mock-oidc",
-    ".next"
+    "mock-oidc"
   ]
 }

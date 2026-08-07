@@ -57,13 +57,19 @@ jobs:
 
       - run: npm ci
 
-      - run: npx tsc --noEmit
-
+      # Build first: Next generates route and layout types into .next/types,
+      # which the tsconfig includes. On a clean checkout those do not exist
+      # yet, so a standalone tsc run fails on generated globals like
+      # LayoutProps. Building also type-checks, and the explicit tsc pass after
+      # it covers files outside the build graph.
       - name: Build
         run: npm run build
         env:
           # Required in production mode; the value is irrelevant to a build.
           DASHBOARD_SESSION_SECRET: ci-build-secret-at-least-32-characters-long
+
+      - name: Typecheck
+        run: npx tsc --noEmit
 
   e2e:
     name: End-to-end (production auth mode)
