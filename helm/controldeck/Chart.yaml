@@ -11,8 +11,3 @@ keywords:
   - entra-id
   - keda
   - llama-swap
-dependencies:
-  - name: postgresql
-    version: "15.x.x"
-    repository: "https://charts.bitnami.com/bitnami"
-    condition: postgresql.enabled

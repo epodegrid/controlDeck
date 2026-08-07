@@ -18,8 +18,33 @@ spec:
       labels:
         controldeck.io/model-id: {{ .id }}
     spec:
+      {{- if and (not ((kindIs "bool" .useMock) | ternary .useMock $.Values.mockModels.enabled)) .llamaSwap.weightsUrl }}
+      # Weights are fetched into an emptyDir before the server starts. In a real
+      # deployment these usually arrive on a PersistentVolume — set weightsUrl
+      # only where pulling at start-up is acceptable, since an air-gapped
+      # cluster cannot reach a model hub at all.
+      initContainers:
+        - name: fetch-weights
+          image: {{ $.Values.weightsFetcher.image | default "curlimages/curl:8.10.1" }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -e
+              if [ -f "{{ .llamaSwap.modelPath }}" ]; then
+                echo "weights already present"; exit 0
+              fi
+              mkdir -p "$(dirname {{ .llamaSwap.modelPath }})"
+              echo "fetching weights"
+              curl -fsSL -o "{{ .llamaSwap.modelPath }}" "{{ .llamaSwap.weightsUrl }}"
+              ls -lh "{{ .llamaSwap.modelPath }}"
+          volumeMounts:
+            - { name: models, mountPath: /models }
+      {{- end }}
       containers:
-      {{- if $.Values.mockModels.enabled }}
+      {{- /* Per-model override, so a real model server can run alongside mocks —
+             a common development shape when only one model's weights are
+             available locally. Falls back to the global switch. */}}
+      {{- if (kindIs "bool" .useMock) | ternary .useMock $.Values.mockModels.enabled }}
         # Mock fleet: same HTTP surface and readiness contract as llama-swap,
         # no weights. See mockModels in values.yaml.
         - name: mock-model
@@ -66,16 +91,32 @@ spec:
       {{- else }}
         - name: llama-swap
           image: {{ .llamaSwap.image }}
+          {{- with .llamaSwap.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           env:
             - name: MODEL_PATH
               value: {{ .llamaSwap.modelPath }}
           ports:
             - containerPort: 8080
           readinessProbe:
+            # llama.cpp/llama-swap hold /health non-200 until the model is
+            # loaded, which is exactly the readiness gate PRD §6.4 needs.
             httpGet: { path: /health, port: 8080 }
             periodSeconds: 5
+            failureThreshold: 60
           resources:
             {{- toYaml .llamaSwap.resources | nindent 12 }}
+          {{- if .llamaSwap.weightsUrl }}
+          volumeMounts:
+            - { name: models, mountPath: /models }
+          {{- end }}
+      {{- if .llamaSwap.weightsUrl }}
+      volumes:
+        - name: models
+          emptyDir: {}
+      {{- end }}
       {{- end }}
 ---
 # Stable in-cluster address for this model's replicas. The router resolves a
@@ -118,7 +159,11 @@ spec:
   triggers:
     - type: metrics-api
       metadata:
-        url: "http://{{ include "controldeck.fullname" $ }}-router:{{ $.Values.router.port }}/metrics/keda/{{ .id }}"
+        # Fully qualified on purpose. The KEDA operator runs in its own
+        # namespace and resolves this URL from there, so a bare Service name
+        # is "no such host" — the ScaledObject reports Ready, the HPA reports
+        # FailedGetExternalMetric, and nothing ever scales.
+        url: "http://{{ include "controldeck.fullname" $ }}-router.{{ $.Release.Namespace }}.svc.cluster.local:{{ $.Values.router.port }}/metrics/keda/{{ .id }}"
         valueLocation: "pending_requests"
         # The HPA computes ceil(pending_requests / targetValue), so this is how
         # many pending requests one replica is expected to absorb. It must

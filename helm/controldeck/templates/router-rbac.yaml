@@ -1,0 +1,49 @@
+# Permissions the router needs to see its own model fleet.
+#
+# Two things depend on this, and both fail silently without it — the router
+# logs an error and the dashboard shows an empty fleet, which looks like a
+# deployment problem rather than a missing Role:
+#
+#   pods      — discovering replicas. A replica has to be an individual pod for
+#               least-loaded placement, per-replica throughput and readiness
+#               gating to mean anything; without this the router can only see
+#               the Service, behind which every replica is the same address.
+#   pods/log  — the live log tail of PRD §6.10.
+#
+# Namespaced, and read-only. The router never creates, modifies or deletes
+# anything in the cluster: scaling is KEDA's job and deployment is Helm's.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "controldeck.fullname" . }}-router
+  labels:
+    {{- include "controldeck.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "controldeck.fullname" . }}-router
+  labels:
+    {{- include "controldeck.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "controldeck.fullname" . }}-router
+  labels:
+    {{- include "controldeck.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "controldeck.fullname" . }}-router
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "controldeck.fullname" . }}-router
+    namespace: {{ .Release.Namespace }}

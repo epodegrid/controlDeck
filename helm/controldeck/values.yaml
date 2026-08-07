@@ -63,6 +63,10 @@ mockModels:
     requests: { cpu: 25m, memory: 32Mi }
     limits: { cpu: 200m, memory: 128Mi }
 
+# Image used by the optional weights-fetch init container.
+weightsFetcher:
+  image: curlimages/curl:8.10.1
+
 metricsApi:
   enabled: true
   port: 9090
@@ -83,16 +87,22 @@ ingress:
           pathType: Prefix
           service: router
 
+# Postgres is deployed by this chart from the official image rather than by a
+# third-party subchart — see templates/postgres.yaml for why.
 postgresql:
   enabled: true
+  image: postgres:16-alpine
   auth:
     username: controldeck
     database: controldeck
-    existingSecret: "" # set to use an operator-managed secret instead of an inline password
-  primary:
-    persistence:
-      enabled: true
-      size: 20Gi
+    # Override in any real deployment, ideally from an existing Secret.
+    password: controldeck
+  persistence:
+    enabled: true
+    size: 20Gi
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "2", memory: 1Gi }
 
 # Config-as-code model registration (GitOps base config, PRD §6.2).
 # Each entry becomes a row in model_registry on chart install/upgrade via the

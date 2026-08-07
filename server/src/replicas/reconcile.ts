@@ -1,6 +1,7 @@
 import { getPool } from "../db/pool.js";
 import { listModels } from "../registry/index.js";
 import { replicaEndpointsFor, replicaIdFor } from "./discovery.js";
+import { inCluster, listModelPods } from "./kubernetes.js";
 
 /**
  * Keeps the `replicas` table in step with what the model backends are actually
@@ -82,15 +83,41 @@ export async function reconcileReplicas(): Promise<ReconcileSummary> {
   const seenIds: string[] = [];
 
   for (const model of models) {
-    const endpoints = replicaEndpointsFor(model);
+    // In-cluster, a replica is a pod: addressed by its own IP and named so the
+    // log tail can ask the Kubernetes API for it. Everywhere else, the
+    // configured endpoint list. Falling back to the model's Service address
+    // would make every replica the same address and per-replica placement
+    // meaningless.
+    let candidates: Array<{ id: string; endpointUrl: string }>;
+    if (inCluster()) {
+      try {
+        const pods = await listModelPods(model.id);
+        candidates = pods.map((pod) => ({ id: pod.name, endpointUrl: pod.endpointUrl }));
+      } catch (err) {
+        // A denied or failing pod list must not wipe the fleet from the
+        // dashboard; keep the previous view and let the next pass retry.
+        console.error(
+          `[reconcile] pod discovery failed for ${model.id}: ${err instanceof Error ? err.message : err}`
+        );
+        const { rows } = await pool.query<{ id: string; endpoint_url: string }>(
+          `SELECT id, endpoint_url FROM replicas WHERE model_id = $1`,
+          [model.id]
+        );
+        candidates = rows.map((r) => ({ id: r.id, endpointUrl: r.endpoint_url }));
+      }
+    } else {
+      candidates = replicaEndpointsFor(model).map((endpointUrl) => ({
+        id: replicaIdFor(model.id, endpointUrl),
+        endpointUrl,
+      }));
+    }
 
     // Probe a model's replicas together — a slow backend shouldn't delay the
     // rest of the fleet's status from refreshing.
     const probes = await Promise.all(
-      endpoints.map(async (endpointUrl) => ({
-        id: replicaIdFor(model.id, endpointUrl),
-        endpointUrl,
-        ...(await probeReplica(endpointUrl)),
+      candidates.map(async (candidate) => ({
+        ...candidate,
+        ...(await probeReplica(candidate.endpointUrl)),
       }))
     );
 
