@@ -126,4 +126,29 @@ spec:
         # generation-bound model — or the fleet is sized wrongly in whichever
         # direction the number is off.
         targetValue: "{{ .keda.requestsPerReplica | default 1 }}"
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          # The metric asks for demand+1 immediately, which on a burst would
+          # mean provisioning several replicas at once. These policies cap how
+          # fast that request is honoured, so the fleet grows in steps: a model
+          # replica has to load its weights and may need a node provisioned
+          # underneath it, and starting six of those simultaneously thrashes
+          # the cluster autoscaler for capacity that arrives too late to help
+          # the burst that asked for it.
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Pods
+              value: {{ .keda.scaleUpPods | default 1 }}
+              periodSeconds: {{ .keda.scaleUpPeriodSeconds | default 30 }}
+        scaleDown:
+          # Slow on the way down. Reloading weights is the expensive operation,
+          # and an idle replica costs little but RAM on this cost model (§6.4),
+          # so the asymmetry is deliberate.
+          stabilizationWindowSeconds: {{ .keda.scaleDownStabilizationSeconds | default 300 }}
+          policies:
+            - type: Pods
+              value: {{ .keda.scaleDownPods | default 1 }}
+              periodSeconds: {{ .keda.scaleDownPeriodSeconds | default 60 }}
 {{- end }}

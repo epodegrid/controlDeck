@@ -113,6 +113,13 @@ models:
       requestsPerReplica: 1
       pollingIntervalSeconds: 15
       cooldownSeconds: 300
+      # Grow one replica at a time. The metric always asks for demand+1; this
+      # governs how quickly that is granted.
+      scaleUpPods: 1
+      scaleUpPeriodSeconds: 30
+      scaleDownPods: 1
+      scaleDownPeriodSeconds: 60
+      scaleDownStabilizationSeconds: 300
     mock:
       tokensPerSec: 15
       loadDelayMs: 20000
@@ -140,6 +147,13 @@ models:
       requestsPerReplica: 1
       pollingIntervalSeconds: 15
       cooldownSeconds: 300
+      # Grow one replica at a time. The metric always asks for demand+1; this
+      # governs how quickly that is granted.
+      scaleUpPods: 1
+      scaleUpPeriodSeconds: 30
+      scaleDownPods: 1
+      scaleDownPeriodSeconds: 60
+      scaleDownStabilizationSeconds: 300
     mock:
       tokensPerSec: 45
       loadDelayMs: 5000
@@ -167,6 +181,13 @@ models:
       requestsPerReplica: 1
       pollingIntervalSeconds: 15
       cooldownSeconds: 300
+      # Grow one replica at a time. The metric always asks for demand+1; this
+      # governs how quickly that is granted.
+      scaleUpPods: 1
+      scaleUpPeriodSeconds: 30
+      scaleDownPods: 1
+      scaleDownPeriodSeconds: 60
+      scaleDownStabilizationSeconds: 300
     mock:
       tokensPerSec: 30
       loadDelayMs: 4000
@@ -194,6 +215,12 @@ models:
       requestsPerReplica: 8
       pollingIntervalSeconds: 15
       cooldownSeconds: 300
+      # Embeddings are quick and the replica is cheap, so it may grow faster.
+      scaleUpPods: 2
+      scaleUpPeriodSeconds: 30
+      scaleDownPods: 1
+      scaleDownPeriodSeconds: 60
+      scaleDownStabilizationSeconds: 300
     mock:
       loadDelayMs: 2000
       maxConcurrency: 8

@@ -322,6 +322,28 @@ many requests a single replica should absorb (`keda.requestsPerReplica`).
 > the deployment could never exceed a single replica whatever `maxReplicaCount`
 > said. Autoscaling could not work at all.
 
+Two separate controls, which are easy to conflate:
+
+- **How much capacity is wanted** — the metric, always `demand + 1`, so there is
+  one warm spare at every level. Idle sits at `minReplicas`; it does not sit at
+  `maxReplicas`.
+- **How fast that is granted** — the HPA `behavior` policies, one replica per
+  30s by default. Without this a burst of seven requests would start six
+  replicas at once, each loading weights and possibly waiting on a node, which
+  thrashes the cluster autoscaler for capacity that lands too late to serve the
+  burst that asked for it.
+
+| demand (in flight + queued) | metric | replicas |
+|---|---|---|
+| 0 | 0 | `minReplicas` |
+| 1 | 2 | 2 |
+| 3 | 4 | 4 |
+| 7 | 8 | `maxReplicas` |
+
+Scale-down is deliberately slower than scale-up (5-minute stabilization): an
+idle replica costs little but RAM on this cost model, while reloading weights is
+expensive.
+
 **Not yet verified against a live cluster.** The arithmetic is unit-tested and
 the chart renders and lints, but whether the KEDA operator reads the metric and
 actually creates pods needs a cluster to answer. Run
