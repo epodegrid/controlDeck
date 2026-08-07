@@ -1,4 +1,8 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { E2E } from "../playwright.config";
+
+const run = promisify(execFile);
 
 /**
  * Fails fast with an actionable message when the supporting containers aren't
@@ -19,12 +23,12 @@ async function reachable(url: string, timeoutMs = 2000): Promise<boolean> {
 }
 
 export default async function globalSetup() {
-  const checks: { name: string; url: string }[] = [
+  const checks = [
     { name: "mock-oidc", url: `${E2E.AUTHORITY}/healthz` },
     { name: "mock model (kestrel-9b-a)", url: "http://localhost:5002/health" },
   ];
 
-  const down = [];
+  const down: string[] = [];
   for (const c of checks) {
     if (!(await reachable(c.url))) down.push(c.name);
   }
@@ -33,7 +37,7 @@ export default async function globalSetup() {
     throw new Error(
       `E2E prerequisites are not running: ${down.join(", ")}.\n\n` +
         `Start the supporting stack first:\n\n` +
-        `    docker compose up -d\n\n` +
+        `    docker compose up -d --wait\n\n` +
         `These tests run the dashboard in production auth mode against the bundled\n` +
         `mock Entra provider, so both it and the model replicas must be up.`
     );
@@ -41,7 +45,17 @@ export default async function globalSetup() {
 
   // The router needs a registered model to route to. In production this comes
   // from Helm; here the demo registry stands in for it.
-  const { seed } = await import("../server/src/db/seed.js");
-  process.env.DATABASE_URL ??= "postgres://controldeck:controldeck@localhost:5433/controldeck";
-  await seed({ force: true });
+  //
+  // Run as a subprocess rather than importing the seed: the router is a
+  // separate project with its own dependencies and tsconfig, and importing
+  // across that boundary makes the dashboard's typecheck depend on the
+  // router's node_modules being installed.
+  await run("npm", ["run", "seed", "--", "--force"], {
+    cwd: "server",
+    env: {
+      ...process.env,
+      DATABASE_URL:
+        process.env.DATABASE_URL ?? "postgres://controldeck:controldeck@localhost:5433/controldeck",
+    },
+  });
 }
