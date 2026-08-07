@@ -322,45 +322,46 @@ describe("scheduler", () => {
       expect(keda.calls).toEqual([MODEL_ID, MODEL_ID]);
     });
 
-    it("reports demand on the KEDA metric while a replica is free, so scaling is preemptive", async () => {
-      // Two ready replicas, one placement. There is still spare capacity, so
-      // the saturation signal alone would report nothing — but §6.4 wants a
-      // warm spare requested the moment a replica takes its first request.
-      await insertReplica("k-1", MODEL_ID, "ready", 0, 0);
-      await insertReplica("k-2", MODEL_ID, "ready", 0, 0);
+    it("reports a scalable quantity, not a flag", async () => {
+      // The bug this replaces: the metric was 0-or-1 against targetValue 1, so
+      // the HPA's ceil(value / target) could only ever yield one replica and
+      // maxReplicaCount was unreachable. It has to grow with demand.
+      await insertReplica("k-a", MODEL_ID, "ready", 3, 0, 4);
+      await insertReplica("k-b", MODEL_ID, "ready", 2, 0, 4);
 
+      const metric = await getKedaMetricForModel(MODEL_ID);
+      expect(metric.in_flight).toBe(5);
+      // Five in flight plus the warm spare of §6.4.
+      expect(metric.pending_requests).toBe(6);
+    });
+
+    it("counts queued requests, which are the clearest signal capacity is short", async () => {
+      await insertReplica("k-full", MODEL_ID, "ready", 1, 0, 1);
+      for (let i = 0; i < 3; i++) {
+        await insertRequestRow(randomUUID(), { status: "queued" });
+      }
+
+      const metric = await getKedaMetricForModel(MODEL_ID);
+      expect(metric.queued).toBe(3);
+      expect(metric.pending_requests).toBe(1 + 3 + 1);
+    });
+
+    it("asks for nothing when the model is idle", async () => {
+      await insertReplica("k-idle", MODEL_ID, "ready", 0, 0, 4);
+      const metric = await getKedaMetricForModel(MODEL_ID);
+      expect(metric.pending_requests).toBe(0);
+    });
+
+    it("keeps one warm spare the moment a replica takes its first request", async () => {
+      // §6.4's preemptive scaling: capacity is requested ahead of saturation,
+      // not after it. One in-flight request must ask for two replicas.
+      await insertReplica("k-first", MODEL_ID, "ready", 0, 0, 4);
       const keda = new MetricsKedaClient();
       await placeRequest(MODEL_ID, { kedaClient: keda });
 
       expect(keda.wantsScaleUp(MODEL_ID)).toBe(true);
-      expect(await getKedaMetricForModel(MODEL_ID, true)).toEqual({ in_flight_ratio: 1 });
-
-      // Without the preemptive signal the same fleet reads as having headroom.
-      expect(await getKedaMetricForModel(MODEL_ID, false)).toEqual({ in_flight_ratio: 0 });
-
-      // A model nobody has touched must not ask for capacity.
-      expect(keda.wantsScaleUp("some-other-model")).toBe(false);
-    });
-
-    it("reports saturation only when no replica has headroom left", async () => {
-      // One replica serving, one idle. Summing in_flight across the fleet
-      // would read as busy; what matters is that a free replica exists.
-      await insertReplica("h-busy", MODEL_ID, "ready", 1, 100, 1);
-      await insertReplica("h-free", MODEL_ID, "ready", 0, 0, 1);
-      expect(await getKedaMetricForModel(MODEL_ID)).toEqual({ in_flight_ratio: 0 });
-
-      // Now both are full — genuinely out of capacity.
-      await insertReplica("h-free", MODEL_ID, "ready", 1, 100, 1);
-      expect(await getKedaMetricForModel(MODEL_ID)).toEqual({ in_flight_ratio: 1 });
-    });
-
-    it("expires the preemptive signal so it does not pin a model at scale-up forever", async () => {
-      const keda = new MetricsKedaClient();
-      await keda.requestScaleUp(MODEL_ID);
-
-      expect(keda.wantsScaleUp(MODEL_ID, 30_000)).toBe(true);
-      // Same recorded signal, evaluated against a window it has fallen out of.
-      expect(keda.wantsScaleUp(MODEL_ID, 0)).toBe(false);
+      const metric = await getKedaMetricForModel(MODEL_ID, true);
+      expect(metric.pending_requests).toBe(2);
     });
 
     it("does not call requestScaleUp again for a request landing on an already-busy replica", async () => {

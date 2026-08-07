@@ -104,15 +104,26 @@ metadata:
   name: {{ .id }}-scaledobject
 spec:
   scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
     name: {{ .id }}-replica
   minReplicaCount: {{ .minReplicas }}
   maxReplicaCount: {{ .maxReplicas }}
-  # Preemptive scaling per PRD §6.4: the router nudges this custom metric the
-  # moment any replica of this model takes its first request, ahead of saturation.
+  # How often KEDA asks the router for the current figure.
+  pollingInterval: {{ .keda.pollingIntervalSeconds | default 15 }}
+  # How long a replica must stay unneeded before it is removed. Generous by
+  # default: reloading model weights is expensive, so trading a little idle
+  # RAM for not paying that cost repeatedly is the right way round (§6.4).
+  cooldownPeriod: {{ .keda.cooldownSeconds | default 300 }}
   triggers:
     - type: metrics-api
       metadata:
-        targetValue: "1"
-        url: "http://controldeck-router:4000/metrics/keda/{{ .id }}"
-        valueLocation: "in_flight_ratio"
+        url: "http://{{ include "controldeck.fullname" $ }}-router:{{ $.Values.router.port }}/metrics/keda/{{ .id }}"
+        valueLocation: "pending_requests"
+        # The HPA computes ceil(pending_requests / targetValue), so this is how
+        # many pending requests one replica is expected to absorb. It must
+        # match what the replica can actually serve concurrently — one, for a
+        # generation-bound model — or the fleet is sized wrongly in whichever
+        # direction the number is off.
+        targetValue: "{{ .keda.requestsPerReplica | default 1 }}"
 {{- end }}

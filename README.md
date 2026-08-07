@@ -309,6 +309,27 @@ Configure via `MODEL_ID`, `CAPABILITIES`, `TOKENS_PER_SEC`, `LOAD_DELAY_MS`, `MA
 
 ---
 
+## Autoscaling (KEDA)
+
+Each model gets a `ScaledObject` whose `metrics-api` trigger polls the router
+at `/metrics/keda/<model>`. The router reports **pending_requests** — in-flight
+plus queued, plus one warm spare whenever there is any demand (§6.4) — and the
+HPA computes `ceil(pending_requests / targetValue)`, where `targetValue` is how
+many requests a single replica should absorb (`keda.requestsPerReplica`).
+
+> The metric must be a *quantity of work*, not a flag. An earlier version
+> reported a binary 0/1 against a target of 1, so `ceil(1/1)` was always 1 and
+> the deployment could never exceed a single replica whatever `maxReplicaCount`
+> said. Autoscaling could not work at all.
+
+**Not yet verified against a live cluster.** The arithmetic is unit-tested and
+the chart renders and lints, but whether the KEDA operator reads the metric and
+actually creates pods needs a cluster to answer. Run
+[`scripts/verify-keda.sh`](scripts/verify-keda.sh) against minikube to find out;
+treat autoscaling as unproven until you have.
+
+---
+
 ## Logs and throughput-aware routing
 
 **Logs** are the replica's own stdout (PRD §6.10), from one of two sources:

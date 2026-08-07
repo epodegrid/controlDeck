@@ -51,40 +51,48 @@ export async function renderPrometheusMetrics(): Promise<string> {
  * Custom-metric feed consumed by each model's KEDA ScaledObject (see
  * helm/controldeck/templates/keda-scaledobjects.yaml).
  *
- * Two independent reasons to report demand:
+ * KEDA hands this value to the HPA, which computes
  *
- *   saturation — no ready-idle replica remains while something is serving.
- *                Reactive: we are already out of headroom.
- *   preemptive — a replica just took its first request, even though others
- *                are still free. This is §6.4's "keep one warm spare ahead of
- *                demand", and it is the reason `recentlyRequestedScaleUp` is
- *                threaded in from the scheduler's KEDA client. Without it the
- *                metric could only ever react after headroom ran out.
+ *     desiredReplicas = ceil(metricValue / targetValue)
+ *
+ * so the metric has to be a *quantity of work*, not a flag. It previously
+ * reported `in_flight_ratio`, which was 0 or 1 against a targetValue of 1 —
+ * meaning ceil(1/1) = 1 and the deployment could never exceed a single
+ * replica whatever `maxReplicaCount` said. Autoscaling could not work.
+ *
+ * It now reports the number of requests needing a replica:
+ *
+ *   in_flight  — currently being served
+ *   queued     — waiting for capacity (§6.5)
+ *   +1         — the warm spare of §6.4, requested whenever there is any
+ *                demand at all, so capacity is provisioned ahead of
+ *                saturation rather than after it
+ *
+ * The ScaledObject's targetValue is how many of those a single replica should
+ * absorb, so ten pending requests at a target of one produce ten replicas,
+ * bounded by maxReplicaCount.
  */
 export async function getKedaMetricForModel(
   modelId: string,
   recentlyRequestedScaleUp = false
-): Promise<{ in_flight_ratio: number }> {
+): Promise<{ pending_requests: number; in_flight: number; queued: number }> {
   const pool = getPool();
-  // Aggregated per model, not grouped by status. Grouping by status and
-  // summing in_flight cannot answer "is any single replica free": two ready
-  // replicas, one serving and one idle, sum to in_flight=1 and looked
-  // saturated even though half the fleet was available.
-  //
-  // Headroom is per replica — in_flight < max_concurrency — so it has to be
-  // evaluated row by row and only then counted.
-  const { rows } = await pool.query<{ with_headroom: string; serving: string }>(
+
+  const { rows } = await pool.query<{ in_flight: string; queued: string }>(
     `SELECT
-       count(*) FILTER (WHERE status = 'ready' AND in_flight < max_concurrency) AS with_headroom,
-       coalesce(sum(in_flight), 0) AS serving
-     FROM replicas
-     WHERE model_id = $1`,
+       (SELECT coalesce(sum(in_flight), 0) FROM replicas WHERE model_id = $1) AS in_flight,
+       (SELECT count(*) FROM requests
+         WHERE status = 'queued' AND routed_model = $1) AS queued`,
     [modelId]
   );
 
-  const withHeadroom = Number(rows[0]?.with_headroom ?? 0);
-  const serving = Number(rows[0]?.serving ?? 0);
-  const saturated = withHeadroom === 0 && serving > 0;
+  const inFlight = Number(rows[0]?.in_flight ?? 0);
+  const queued = Number(rows[0]?.queued ?? 0);
+  const demand = inFlight + queued;
 
-  return { in_flight_ratio: saturated || recentlyRequestedScaleUp ? 1 : 0 };
+  // The warm spare: any demand at all, or a placement that just signalled one,
+  // asks for one replica beyond what is strictly needed.
+  const spare = demand > 0 || recentlyRequestedScaleUp ? 1 : 0;
+
+  return { pending_requests: demand + spare, in_flight: inFlight, queued };
 }

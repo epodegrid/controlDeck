@@ -107,6 +107,12 @@ models:
     costBasis: per_1k_tokens
     costValue: 0.0042
     systemPrompt: "You are a careful, methodical assistant."
+    keda:
+      # Requests a single replica should absorb; drives
+      # ceil(pending / requestsPerReplica) in the HPA.
+      requestsPerReplica: 1
+      pollingIntervalSeconds: 15
+      cooldownSeconds: 300
     mock:
       tokensPerSec: 15
       loadDelayMs: 20000
@@ -128,6 +134,12 @@ models:
     costBasis: per_1k_tokens
     costValue: 0.0011
     systemPrompt: "You are a concise assistant. Prefer short, direct answers."
+    keda:
+      # Requests a single replica should absorb; drives
+      # ceil(pending / requestsPerReplica) in the HPA.
+      requestsPerReplica: 1
+      pollingIntervalSeconds: 15
+      cooldownSeconds: 300
     mock:
       tokensPerSec: 45
       loadDelayMs: 5000
@@ -149,6 +161,12 @@ models:
     costBasis: per_1k_tokens
     costValue: 0.0019
     systemPrompt: "You can see attached images. Describe what you observe before answering."
+    keda:
+      # Requests a single replica should absorb; drives
+      # ceil(pending / requestsPerReplica) in the HPA.
+      requestsPerReplica: 1
+      pollingIntervalSeconds: 15
+      cooldownSeconds: 300
     mock:
       tokensPerSec: 30
       loadDelayMs: 4000
@@ -170,6 +188,12 @@ models:
     costBasis: per_compute_second
     costValue: 0.0003
     systemPrompt: ""
+    keda:
+      # Requests a single replica should absorb; drives
+      # ceil(pending / requestsPerReplica) in the HPA.
+      requestsPerReplica: 8
+      pollingIntervalSeconds: 15
+      cooldownSeconds: 300
     mock:
       loadDelayMs: 2000
       maxConcurrency: 8
