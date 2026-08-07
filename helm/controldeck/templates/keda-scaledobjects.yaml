@@ -1,0 +1,118 @@
+{{- range .Values.models }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .id }}-replica
+  labels:
+    app.kubernetes.io/part-of: controldeck
+    app.kubernetes.io/component: model-replica
+    controldeck.io/model-id: {{ .id }}
+spec:
+  replicas: {{ .minReplicas }}
+  selector:
+    matchLabels:
+      controldeck.io/model-id: {{ .id }}
+  template:
+    metadata:
+      labels:
+        controldeck.io/model-id: {{ .id }}
+    spec:
+      containers:
+      {{- if $.Values.mockModels.enabled }}
+        # Mock fleet: same HTTP surface and readiness contract as llama-swap,
+        # no weights. See mockModels in values.yaml.
+        - name: mock-model
+          image: "{{ $.Values.mockModels.image.repository }}:{{ $.Values.mockModels.image.tag }}"
+          imagePullPolicy: {{ $.Values.mockModels.image.pullPolicy }}
+          env:
+            - name: MODEL_ID
+              value: {{ .id | quote }}
+            - name: CAPABILITIES
+              value: {{ join "," .capabilities | quote }}
+            {{- with .mock }}
+            {{- if .tokensPerSec }}
+            - name: TOKENS_PER_SEC
+              value: {{ .tokensPerSec | quote }}
+            {{- end }}
+            {{- if .loadDelayMs }}
+            - name: LOAD_DELAY_MS
+              value: {{ .loadDelayMs | quote }}
+            {{- end }}
+            {{- if .maxConcurrency }}
+            - name: MAX_CONCURRENCY
+              value: {{ .maxConcurrency | quote }}
+            {{- end }}
+            {{- if .replyMinTokens }}
+            - name: REPLY_MIN_TOKENS
+              value: {{ .replyMinTokens | quote }}
+            {{- end }}
+            {{- if .replyMaxTokens }}
+            - name: REPLY_MAX_TOKENS
+              value: {{ .replyMaxTokens | quote }}
+            {{- end }}
+            {{- if .embeddingDim }}
+            - name: EMBEDDING_DIM
+              value: {{ .embeddingDim | quote }}
+            {{- end }}
+            {{- end }}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 5
+          resources:
+            {{- toYaml $.Values.mockModels.resources | nindent 12 }}
+      {{- else }}
+        - name: llama-swap
+          image: {{ .llamaSwap.image }}
+          env:
+            - name: MODEL_PATH
+              value: {{ .llamaSwap.modelPath }}
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 5
+          resources:
+            {{- toYaml .llamaSwap.resources | nindent 12 }}
+      {{- end }}
+---
+# Stable in-cluster address for this model's replicas. The router resolves a
+# model's endpoint_url to this Service; kube-proxy spreads across ready pods,
+# and unready pods (still loading weights) are excluded from Endpoints, which
+# is what enforces the readiness gating of PRD §6.4 at the network layer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .id }}
+  labels:
+    app.kubernetes.io/part-of: controldeck
+    app.kubernetes.io/component: model-replica
+    controldeck.io/model-id: {{ .id }}
+spec:
+  selector:
+    controldeck.io/model-id: {{ .id }}
+  ports:
+    - port: 80
+      targetPort: 8080
+      name: http
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ .id }}-scaledobject
+spec:
+  scaleTargetRef:
+    name: {{ .id }}-replica
+  minReplicaCount: {{ .minReplicas }}
+  maxReplicaCount: {{ .maxReplicas }}
+  # Preemptive scaling per PRD §6.4: the router nudges this custom metric the
+  # moment any replica of this model takes its first request, ahead of saturation.
+  triggers:
+    - type: metrics-api
+      metadata:
+        targetValue: "1"
+        url: "http://controldeck-router:4000/metrics/keda/{{ .id }}"
+        valueLocation: "in_flight_ratio"
+{{- end }}

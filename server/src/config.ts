@@ -1,0 +1,60 @@
+import { generateKeyPair, exportJWK, type JWK, type KeyLike } from "jose";
+import { createLocalJwksSource, createRemoteJwksSource, type JWKSSource } from "./auth/index.js";
+
+/**
+ * Sim mode is the single switch between "this is a demo you can explore" and
+ * "this is a gateway serving a real tenant".
+ *
+ *   SIM_MODE=true  — mint local dev tokens without an Entra tenant, allow the
+ *                    seed to install its fictional model registry, and let the
+ *                    traffic simulator run. For local dev, demos, and CI.
+ *   SIM_MODE unset — production. No token minting, no fictional data, no
+ *                    simulator. A fresh deploy starts completely empty and
+ *                    fills only with real traffic.
+ *
+ * It must default to off: a deployment that forgets to set it should be safe
+ * and empty, never one that silently exposes a token-minting endpoint.
+ */
+const simMode = process.env.SIM_MODE === "true" || process.env.USE_FAKE_ADAPTERS === "true";
+
+export const config = {
+  port: Number(process.env.PORT ?? 4000),
+  simMode,
+  audience: process.env.ENTRA_AUDIENCE ?? "api://llm-gateway",
+  issuer: process.env.ENTRA_ISSUER ?? "https://login.microsoftonline.com/dev-tenant/v2.0",
+  jwksUri: process.env.ENTRA_JWKS_URI ?? "",
+};
+
+let devSigningKey: { privateKey: KeyLike; jwks: { keys: JWK[] } } | null = null;
+
+/**
+ * Sim-mode identity provider stand-in. Generates a local RSA keypair once at
+ * process start and exposes it as a JWKS, so SIM_MODE=true can validate and
+ * mint tokens without a live Entra tenant. Never reachable in production —
+ * there, ENTRA_JWKS_URI must point at a real tenant.
+ */
+export async function getDevSigningKey() {
+  if (!devSigningKey) {
+    const { privateKey, publicKey } = await generateKeyPair("RS256");
+    const jwk = await exportJWK(publicKey);
+    jwk.kid = "dev-key-1";
+    jwk.alg = "RS256";
+    jwk.use = "sig";
+    devSigningKey = { privateKey, jwks: { keys: [jwk] } };
+  }
+  return devSigningKey;
+}
+
+export async function getJwksSource(): Promise<JWKSSource> {
+  if (config.simMode) {
+    const { jwks } = await getDevSigningKey();
+    return createLocalJwksSource(jwks);
+  }
+  if (!config.jwksUri) {
+    throw new Error(
+      "ENTRA_JWKS_URI must be set in production. Point it at your tenant's JWKS endpoint, " +
+        "or set SIM_MODE=true to run against locally-minted dev tokens instead."
+    );
+  }
+  return createRemoteJwksSource(config.jwksUri);
+}

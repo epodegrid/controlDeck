@@ -1,0 +1,180 @@
+# controlDeck default values.
+# Model registration primary path is GitOps: define models under `models:` below
+# and deploy via this chart. Dashboard-made live edits are stored as an override
+# layer in Postgres and merged at read time — they are never clobbered by a
+# Helm upgrade, but Helm always wins on a genuine field conflict (see PRD §6.2, §11).
+
+router:
+  image:
+    repository: ghcr.io/your-org/controldeck-router
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2 # HA — router state lives in Postgres, not in-memory (PRD §8)
+  port: 4000
+  resources:
+    requests: { cpu: 250m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+  env:
+    ENTRA_TENANT_ID: ""
+    ENTRA_JWKS_URI: ""
+    ENTRA_AUDIENCE: "api://llm-gateway"
+    ENTRA_ISSUER: ""
+    STALL_TIMEOUT_MS: "60000"
+    QUEUE_TIMEOUT_MS: "300000"
+    USE_FAKE_ADAPTERS: "false"
+
+dashboard:
+  image:
+    repository: ghcr.io/your-org/controldeck-dashboard
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  port: 3000
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  env:
+    NEXT_PUBLIC_API_BASE_URL: "http://controldeck-router:4000"
+    DASHBOARD_ENTRA_CLIENT_ID: ""
+    DASHBOARD_ENTRA_TENANT_ID: ""
+    DASHBOARD_ADMIN_GROUP_ID: ""
+
+# Mock model fleet.
+#
+# When enabled, every model's replica Deployment runs the dependency-free
+# mock-model image instead of ik_llama.cpp/llama-swap: same OpenAI-compatible
+# surface, same readiness endpoint, no weights and no GPU. This is what makes
+# the platform deployable to minikube (or any cluster without model hardware)
+# for end-to-end testing of routing, queueing, audit and the dashboard.
+#
+# Never enable this in an environment expected to serve real inference.
+mockModels:
+  enabled: false
+  image:
+    repository: controldeck/mock-model
+    tag: "0.1.0"
+    # IfNotPresent so an image side-loaded onto the node (minikube image load,
+    # or a build against the node's docker daemon) is used as-is rather than
+    # pulled from a registry that may not be reachable.
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
+
+metricsApi:
+  enabled: true
+  port: 9090
+  # Exposes the same underlying data the dashboard shows, for Grafana/Prometheus scrape.
+  # Served by the router process at /metrics — no separate deployment needed by default.
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: controldeck.example.internal
+      paths:
+        - path: /
+          pathType: Prefix
+          service: dashboard
+        - path: /v1
+          pathType: Prefix
+          service: router
+
+postgresql:
+  enabled: true
+  auth:
+    username: controldeck
+    database: controldeck
+    existingSecret: "" # set to use an operator-managed secret instead of an inline password
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+
+# Config-as-code model registration (GitOps base config, PRD §6.2).
+# Each entry becomes a row in model_registry on chart install/upgrade via the
+# router's startup reconciliation, and drives a per-model KEDA ScaledObject.
+models:
+  - id: ornith-35b
+    name: "Ornith-1.0 35B"
+    modelClass: large
+    capabilities: [chat, tools]
+    minReplicas: 1
+    maxReplicas: 6
+    costBasis: per_1k_tokens
+    costValue: 0.0042
+    systemPrompt: "You are a careful, methodical assistant."
+    mock:
+      tokensPerSec: 15
+      loadDelayMs: 20000
+      maxConcurrency: 3
+      replyMinTokens: 40
+      replyMaxTokens: 120
+    llamaSwap:
+      image: ghcr.io/your-org/ik-llama-cpp:latest
+      modelPath: /models/ornith-1.0-q4_k_m.gguf
+      resources:
+        requests: { cpu: "4", memory: 40Gi }
+        limits: { cpu: "8", memory: 48Gi }
+  - id: kestrel-9b
+    name: "Kestrel-9B"
+    modelClass: fast
+    capabilities: [chat, tools]
+    minReplicas: 2
+    maxReplicas: 8
+    costBasis: per_1k_tokens
+    costValue: 0.0011
+    systemPrompt: "You are a concise assistant. Prefer short, direct answers."
+    mock:
+      tokensPerSec: 45
+      loadDelayMs: 5000
+      maxConcurrency: 4
+      replyMinTokens: 12
+      replyMaxTokens: 48
+    llamaSwap:
+      image: ghcr.io/your-org/ik-llama-cpp:latest
+      modelPath: /models/kestrel-9b-q4_k_m.gguf
+      resources:
+        requests: { cpu: "2", memory: 12Gi }
+        limits: { cpu: "4", memory: 16Gi }
+  - id: lark-vision
+    name: "Lark-Vision 2B"
+    modelClass: vision
+    capabilities: [chat, vision]
+    minReplicas: 1
+    maxReplicas: 4
+    costBasis: per_1k_tokens
+    costValue: 0.0019
+    systemPrompt: "You can see attached images. Describe what you observe before answering."
+    mock:
+      tokensPerSec: 30
+      loadDelayMs: 4000
+      maxConcurrency: 2
+      replyMinTokens: 16
+      replyMaxTokens: 60
+    llamaSwap:
+      image: ghcr.io/your-org/ik-llama-cpp:latest
+      modelPath: /models/lark-vision-2b.gguf
+      resources:
+        requests: { cpu: "1", memory: 6Gi }
+        limits: { cpu: "2", memory: 8Gi }
+  - id: ember-embed
+    name: "Ember-Embed"
+    modelClass: embedding
+    capabilities: [embeddings]
+    minReplicas: 1
+    maxReplicas: 3
+    costBasis: per_compute_second
+    costValue: 0.0003
+    systemPrompt: ""
+    mock:
+      loadDelayMs: 2000
+      maxConcurrency: 8
+      embeddingDim: 384
+    llamaSwap:
+      image: ghcr.io/your-org/ik-llama-cpp:latest
+      modelPath: /models/ember-embed.gguf
+      resources:
+        requests: { cpu: 500m, memory: 2Gi }
+        limits: { cpu: "1", memory: 4Gi }

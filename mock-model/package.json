@@ -1,0 +1,10 @@
+{
+  "name": "@controldeck/mock-model",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dependency-free stand-in for a llama-swap model replica, for exercising the router end to end.",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

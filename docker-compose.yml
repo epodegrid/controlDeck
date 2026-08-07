@@ -1,0 +1,111 @@
+# Local sim-mode stack: Postgres plus a fleet of mock model replicas.
+#
+# Each container is one replica. The router discovers them by probing the
+# addresses listed in MODEL_REPLICAS_* (see server/.env.example) and health-
+# checks each one independently, so least-loaded placement, readiness gating
+# and per-replica routing all exercise the production code path — only the
+# model weights are fake.
+#
+# Characteristics mirror the seeded registry: the 35B loads slowly, generates
+# at the ~15 tok/s floor cited in PRD §6.5 and serves one request at a time;
+# the 9B is fast and handles concurrency.
+
+x-mock-model: &mock-model
+  build: ./mock-model
+  restart: unless-stopped
+
+x-ornith-env: &ornith-env
+  MODEL_ID: ornith-35b
+  CAPABILITIES: chat,tools
+  TOKENS_PER_SEC: 15
+  LOAD_DELAY_MS: 20000
+  MAX_CONCURRENCY: 1
+  REPLY_MIN_TOKENS: 40
+  REPLY_MAX_TOKENS: 120
+
+x-kestrel-env: &kestrel-env
+  MODEL_ID: kestrel-9b
+  CAPABILITIES: chat,tools
+  TOKENS_PER_SEC: 45
+  LOAD_DELAY_MS: 5000
+  MAX_CONCURRENCY: 1
+  REPLY_MIN_TOKENS: 12
+  REPLY_MAX_TOKENS: 48
+
+x-lark-env: &lark-env
+  MODEL_ID: lark-vision
+  CAPABILITIES: chat,vision
+  TOKENS_PER_SEC: 30
+  LOAD_DELAY_MS: 4000
+  MAX_CONCURRENCY: 1
+  REPLY_MIN_TOKENS: 16
+  REPLY_MAX_TOKENS: 60
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: controldeck
+      POSTGRES_PASSWORD: controldeck
+      POSTGRES_DB: controldeck
+    ports:
+      - "5433:5432"
+    volumes:
+      - controldeck-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U controldeck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- ornith-35b: 2 replicas -------------------------------------------
+  ornith-35b-a:
+    <<: *mock-model
+    environment: *ornith-env
+    ports: ["5001:8080"]
+
+  ornith-35b-b:
+    <<: *mock-model
+    environment: *ornith-env
+    ports: ["5011:8080"]
+
+  # --- kestrel-9b: 3 replicas -------------------------------------------
+  kestrel-9b-a:
+    <<: *mock-model
+    environment: *kestrel-env
+    ports: ["5002:8080"]
+
+  kestrel-9b-b:
+    <<: *mock-model
+    environment: *kestrel-env
+    ports: ["5012:8080"]
+
+  kestrel-9b-c:
+    <<: *mock-model
+    environment: *kestrel-env
+    ports: ["5022:8080"]
+
+  # --- lark-vision: 2 replicas ------------------------------------------
+  lark-vision-a:
+    <<: *mock-model
+    environment: *lark-env
+    ports: ["5003:8080"]
+
+  lark-vision-b:
+    <<: *mock-model
+    environment: *lark-env
+    ports: ["5013:8080"]
+
+  # --- ember-embed: 1 replica, parallel-capable --------------------------
+  ember-embed-a:
+    <<: *mock-model
+    environment:
+      MODEL_ID: ember-embed
+      CAPABILITIES: embeddings
+      LOAD_DELAY_MS: 2000
+      MAX_CONCURRENCY: 8
+      EMBEDDING_DIM: 384
+    ports: ["5004:8080"]
+
+volumes:
+  controldeck-pg:

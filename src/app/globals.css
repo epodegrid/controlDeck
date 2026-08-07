@@ -1,26 +1,495 @@
 @import "tailwindcss";
 
+/* ===========================================================================
+   controlDeck design tokens.
+
+   The look is built on one idea: very light type at very large sizes, on
+   near-white surfaces, with colour used almost nowhere. Two accents only —
+   a periwinkle panel and a lime highlight — and they are never used together
+   on the same element. Everything else is greyscale.
+
+   Weight discipline is what makes it read correctly: display numerals sit at
+   200, headings at 400–500, and nothing in the UI goes above 500. Reaching
+   for bold is what turns this design into a generic dashboard.
+   =========================================================================== */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --paper: #fbfbfa;
+  --paper-2: #f5f5f4;
+  --card: #ffffff;
+
+  --ink: #111111;
+  --ink-soft: #2a2a2a;
+
+  --gray-1: #f2f2f0;   /* card fills, inert bars */
+  --gray-2: #8c8c8c;   /* secondary text */
+  --gray-3: #dcdcda;   /* hairlines, borders */
+
+  --accent: #ccf344;     /* lime — highlight ONE thing per view */
+  --accent-ink: #1b2400; /* text on lime */
+  --accent-2: #9db4e8;   /* periwinkle — hero panel */
+  --accent-2-deep: #8aa4e0;
+
+  --status-green: #4ba664;
+  --status-yellow: #d9a520;
+  --status-red: #d15a4e;
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+
+  --radius-card: 22px;
+  --radius-tile: 18px;
+  --radius-pill: 999px;
+
+  /* One easing for everything that moves. Consistency reads as "buttery"
+     far more than any individual curve does. */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-paper: var(--paper);
+  --color-paper-2: var(--paper-2);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-gray-1: var(--gray-1);
+  --color-gray-2: var(--gray-2);
+  --color-gray-3: var(--gray-3);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-2: var(--accent-2);
+  --color-accent-2-deep: var(--accent-2-deep);
+  --color-status-green: var(--status-green);
+  --color-status-yellow: var(--status-yellow);
+  --color-status-red: var(--status-red);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --radius-card: var(--radius-card);
+  --radius-tile: var(--radius-tile);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  font-weight: 400;
+}
+
+/* ---------------------------------------------------------------------------
+   Type
+   ------------------------------------------------------------------------- */
+
+/* Hero numerals. Light weight, slight negative tracking so the wide geometric
+   figures don't drift apart, tabular so counting animations don't reflow. */
+.stat-hero {
+  font-weight: 200;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 0.9;
+}
+
+.stat-lg {
+  font-weight: 200;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.015em;
+  line-height: 1;
+}
+
+.stat-md {
+  font-weight: 300;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+
+/* Small all-caps label above a value. The wide tracking is what keeps it
+   feeling designed rather than merely small. */
+.label-eyebrow {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gray-2);
+  line-height: 1;
+}
+
+.label-soft {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--gray-2);
+  letter-spacing: 0.005em;
+}
+
+/* The reference pairs an upright greeting with a ghosted italic second line. */
+.ghost-italic {
+  font-style: italic;
+  font-weight: 200;
+  opacity: 0.55;
+}
+
+.unit {
+  font-size: 0.42em;
+  font-weight: 400;
+  letter-spacing: 0;
+  margin-left: 0.12em;
+  color: var(--gray-2);
+}
+
+/* ---------------------------------------------------------------------------
+   Surfaces
+   ------------------------------------------------------------------------- */
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius-card);
+  box-shadow:
+    0 1px 2px rgba(17, 17, 17, 0.03),
+    0 6px 24px -12px rgba(17, 17, 17, 0.08);
+}
+
+.tile {
+  background: var(--gray-1);
+  border-radius: var(--radius-tile);
+}
+
+.panel-accent {
+  background: linear-gradient(168deg, var(--accent-2) 0%, var(--accent-2-deep) 100%);
+  border-radius: var(--radius-card);
+  color: #fff;
+}
+
+/* Ambient wash. Very low opacity on purpose — it should register as warmth in
+   the corner of the eye, never as a coloured background. */
+.ambient-wash {
+  position: relative;
+  isolation: isolate;
+}
+.ambient-wash::before {
+  content: "";
+  position: absolute;
+  inset: -25% -15% auto -15%;
+  height: 85%;
+  z-index: -1;
+  filter: blur(90px);
+  opacity: 0.4;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 55% at 8% 18%, rgba(157, 180, 232, 0.55), transparent 70%),
+    radial-gradient(42% 60% at 92% 88%, rgba(204, 243, 68, 0.4), transparent 70%);
+  animation: ambient-drift 28s var(--ease-in-out-soft) infinite alternate;
+}
+
+@keyframes ambient-drift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  100% { transform: translate3d(2%, -1.5%, 0) scale(1.05); }
+}
+
+/* ---------------------------------------------------------------------------
+   Signature motifs
+   ------------------------------------------------------------------------- */
+
+/* Lime callout pill that floats above a data point, joined to it by a hairline.
+   Used for exactly one value per chart. */
+.anno-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.anno-chip-soft {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--gray-1);
+  color: var(--gray-2);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* The hairline connecting a callout pill to its data point. */
+.leader-line {
+  width: 1px;
+  background: currentColor;
+  opacity: 0.35;
+  transform-origin: top;
+  animation: leader-draw 700ms 500ms var(--ease-out-soft) both;
+}
+
+@keyframes leader-draw {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+/* Ticked bar: a run of thin vertical strokes that fill to a proportion. The
+   reference uses it wherever a plain progress bar would feel too solid. */
+.tick-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 100%;
+}
+.tick {
+  flex: 1;
+  border-radius: 1px;
+  background: currentColor;
+  transform-origin: bottom;
+  animation: tick-rise 520ms var(--ease-out-soft) both;
+}
+
+@keyframes tick-rise {
+  from { transform: scaleY(0.15); opacity: 0; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion
+   ------------------------------------------------------------------------- */
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.rise-in { animation: rise-in 620ms var(--ease-out-soft) both; }
+
+@keyframes bar-grow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+.bar-grow {
+  transform-origin: bottom;
+  animation: bar-grow 820ms var(--ease-out-soft) both;
+}
+
+@keyframes ring-draw {
+  from { stroke-dashoffset: var(--ring-len); }
+  to { stroke-dashoffset: var(--ring-off); }
+}
+.ring-draw {
+  stroke-dasharray: var(--ring-len);
+  stroke-dashoffset: var(--ring-len);
+  animation: ring-draw 1500ms 200ms var(--ease-out-soft) forwards;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.8); }
+}
+.live-dot { animation: pulse-dot 2.4s var(--ease-in-out-soft) infinite; }
+
+/* Hover: a small lift and a slightly deeper shadow. Anything more emphatic
+   fights the calm of the surface. */
+.lift {
+  transition:
+    transform 380ms var(--ease-out-soft),
+    box-shadow 380ms var(--ease-out-soft);
+}
+.lift:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 2px 4px rgba(17, 17, 17, 0.04),
+    0 18px 40px -18px rgba(17, 17, 17, 0.14);
+}
+
+button,
+a {
+  transition:
+    background-color 220ms var(--ease-out-soft),
+    color 220ms var(--ease-out-soft),
+    opacity 220ms var(--ease-out-soft),
+    box-shadow 280ms var(--ease-out-soft);
+}
+
+/* Respect the OS setting. Everything above is decorative; none of it carries
+   information that is lost when it stops. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ---------------------------------------------------------------------------
+   Shared utilities used across the views.
+
+   These names are referenced throughout the pages; their definitions are what
+   carries the design language, so restyling happens here rather than in
+   twenty files.
+   ------------------------------------------------------------------------- */
+
+.shadow-soft {
+  box-shadow:
+    0 1px 2px rgba(17, 17, 17, 0.03),
+    0 4px 16px -10px rgba(17, 17, 17, 0.07);
+}
+.shadow-soft-2 {
+  background: var(--card);
+  border-radius: var(--radius-card);
+  box-shadow:
+    0 1px 2px rgba(17, 17, 17, 0.03),
+    0 6px 24px -12px rgba(17, 17, 17, 0.08);
+}
+.shadow-soft-3,
+.shadow-float {
+  box-shadow:
+    0 2px 6px rgba(17, 17, 17, 0.04),
+    0 24px 60px -24px rgba(17, 17, 17, 0.16);
+}
+.card-shadow {
+  box-shadow: 0 1px 3px rgba(17, 17, 17, 0.06);
+}
+.shadow-glow-yellow {
+  box-shadow: 0 8px 26px -10px rgba(204, 243, 68, 0.7);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+}
+
+/* Small neutral eyebrow above a section title. Deliberately not lime — the
+   accent is reserved for data, so chrome never competes with a highlight. */
+.section-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--gray-1);
+  color: var(--gray-2);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1;
+}
+
+.display-stat {
+  font-weight: 200;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 0.95;
+}
+
+/* Entrance stagger. The delays are what make a view assemble rather than
+   simply appear. */
+.fade-in { animation: rise-in 620ms var(--ease-out-soft) both; }
+.fade-in-1 { animation: rise-in 620ms 70ms var(--ease-out-soft) both; }
+.fade-in-2 { animation: rise-in 620ms 140ms var(--ease-out-soft) both; }
+.fade-in-3 { animation: rise-in 620ms 210ms var(--ease-out-soft) both; }
+.fade-in-4 { animation: rise-in 620ms 280ms var(--ease-out-soft) both; }
+.count-in { animation: rise-in 720ms 120ms var(--ease-out-soft) both; }
+
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+.float-y { animation: float-y 7s var(--ease-in-out-soft) infinite; }
+
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.03); opacity: 0.94; }
+}
+.breathe { animation: breathe 5s var(--ease-in-out-soft) infinite; }
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer-bar {
+  background: linear-gradient(90deg, transparent, rgba(204, 243, 68, 0.6), transparent);
+  background-size: 200% 100%;
+  animation: shimmer 3.4s linear infinite;
+}
+
+.glow-on-hover { transition: box-shadow 320ms var(--ease-out-soft); }
+.glow-on-hover:hover { box-shadow: 0 10px 30px -12px rgba(17, 17, 17, 0.22); }
+
+.ring-fill {
+  stroke-dasharray: var(--ring-len);
+  stroke-dashoffset: var(--ring-len);
+  animation: ring-draw 1500ms 200ms var(--ease-out-soft) forwards;
+}
+
+.dot-grid {
+  background-image: radial-gradient(circle, rgba(17, 17, 17, 0.05) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+.signature-gradient {
+  background-image: linear-gradient(135deg, var(--accent-2) 0%, #ffffff 52%, var(--accent) 100%);
+}
+
+/* Device chrome, used only on the overview hero. */
+.device-monitor {
+  position: relative;
+  border-radius: 26px;
+  background: linear-gradient(180deg, #ffffff, #efefec);
+  padding: 12px 12px 44px;
+  box-shadow:
+    0 2px 6px rgba(17, 17, 17, 0.04),
+    0 40px 90px -40px rgba(17, 17, 17, 0.28);
+}
+.device-monitor::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  width: 90px;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(17, 17, 17, 0.14);
+}
+.device-screen {
+  border-radius: 18px;
+  overflow: hidden;
+  background: var(--card);
+}
+
+.kbd {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--gray-2);
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbar
+   ------------------------------------------------------------------------- */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(17, 17, 17, 0.1);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(17, 17, 17, 0.2);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }

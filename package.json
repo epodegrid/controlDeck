@@ -1,16 +1,20 @@
 {
-  "name": "cd-build",
+  "name": "controldeck",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "dev:sim": "SIM_MODE=true next dev",
+    "start:sim": "SIM_MODE=true next start"
   },
   "dependencies": {
+    "jose": "^6.2.8",
     "next": "16.3.0",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

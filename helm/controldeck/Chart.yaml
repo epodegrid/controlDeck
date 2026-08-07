@@ -1,0 +1,18 @@
+apiVersion: v2
+name: controldeck
+description: Self-hosted, OpenAI-API-compatible LLM gateway with Entra ID auth, cost tracking, audit logging, and dynamic autoscaling.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/your-org/controldeck
+keywords:
+  - llm
+  - gateway
+  - entra-id
+  - keda
+  - llama-swap
+dependencies:
+  - name: postgresql
+    version: "15.x.x"
+    repository: "https://charts.bitnami.com/bitnami"
+    condition: postgresql.enabled
