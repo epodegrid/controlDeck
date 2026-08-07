@@ -58,6 +58,12 @@ spec:
             - name: MODEL_ENDPOINT_{{ .id | upper | replace "-" "_" }}
               value: "http://{{ .id }}"
             {{- end }}
+          {{- if .Values.models }}
+          volumeMounts:
+            - name: models-config
+              mountPath: /etc/controldeck
+              readOnly: true
+          {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: {{ .Values.router.port }} }
             initialDelaySeconds: 5
@@ -68,6 +74,12 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.router.resources | nindent 12 }}
+      {{- if .Values.models }}
+      volumes:
+        - name: models-config
+          configMap:
+            name: {{ include "controldeck.fullname" . }}-models
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

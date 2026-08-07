@@ -44,6 +44,41 @@ afterAll(async () => {
 });
 
 describe("HTTP API", () => {
+  it("forwards tools[] to the backend rather than silently dropping them", async () => {
+    // §6.12 requires tool calling to be a pass-through. The router filters on
+    // the `tools` capability and routes accordingly, so dropping the tools
+    // afterwards gives the caller a plain answer with no hint why.
+    const captured: Array<Record<string, unknown>> = [];
+    const recording = {
+      async checkReady() { return true; },
+      async *streamChat(params: Record<string, unknown>) {
+        captured.push(params);
+        yield { token: "ok", done: false };
+        yield { token: "", done: true };
+      },
+      async embed() { return [[0]]; },
+    };
+
+    const recordingApp = await buildApp({ kedaClient, logger: false, llamaSwap: recording as never });
+    await recordingApp.ready();
+    const t = JSON.parse(
+      (await recordingApp.inject({ method: "POST", url: "/dev/token", payload: { oid: "tools", name: "Tools" } })).body
+    ).access_token;
+
+    const tools = [{ type: "function", function: { name: "search", parameters: {} } }];
+    await recordingApp.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: `Bearer ${t}` },
+      payload: { messages: [{ role: "user", content: "find something" }], tools, tool_choice: "auto" },
+    });
+
+    expect(captured.length).toBeGreaterThan(0);
+    expect(captured[0].tools).toEqual(tools);
+    expect(captured[0].toolChoice).toBe("auto");
+    await recordingApp.close();
+  });
+
   it("streaming responses carry CORS headers", async () => {
     // Writing to reply.raw bypasses Fastify's reply object, which silently
     // dropped the headers @fastify/cors had set. The stream was perfectly

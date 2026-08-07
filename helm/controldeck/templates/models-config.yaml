@@ -1,0 +1,37 @@
+{{- if .Values.models }}
+# The model registry, as config-as-code (PRD §6.2).
+#
+# The router reads this at startup and reconciles it into `model_registry`.
+# Without it the chart would deploy model workloads that the router knows
+# nothing about: an empty registry means /v1/models returns nothing and every
+# request is rejected as capability_mismatch.
+#
+# Only the base config lives here. Dashboard edits are stored separately in
+# `model_registry_overrides` and merged on top at read time, so a redeploy can
+# never overwrite them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "controldeck.fullname" . }}-models
+  labels:
+    {{- include "controldeck.labels" . | nindent 4 }}
+data:
+  models.json: |
+    {{- $models := list }}
+    {{- range .Values.models }}
+    {{- $models = append $models (dict
+        "id" .id
+        "name" (.name | default .id)
+        "classLabel" (.classLabel | default .modelClass)
+        "modelClass" .modelClass
+        "capabilities" .capabilities
+        "minReplicas" (.minReplicas | default 1)
+        "maxReplicas" (.maxReplicas | default 1)
+        "systemPrompt" (.systemPrompt | default "")
+        "costValue" (.costValue | default 0)
+        "costBasis" (.costBasis | default "per_1k_tokens")
+        "endpointUrl" (printf "http://%s.%s.svc.cluster.local" .id $.Release.Namespace)
+    ) }}
+    {{- end }}
+    {{ dict "models" $models | toJson }}
+{{- end }}

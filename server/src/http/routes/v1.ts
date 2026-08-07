@@ -123,6 +123,8 @@ export function registerV1Routes(
           endpointUrl: targetUrl,
           messages: body.messages,
           systemPrompt: model.systemPrompt,
+          tools: body.tools,
+          toolChoice: body.tool_choice,
         })) {
           if (chunk.done) break;
           outputTokens += 1;
@@ -168,6 +170,8 @@ export function registerV1Routes(
         endpointUrl: targetUrl,
         messages: body.messages,
         systemPrompt: model.systemPrompt,
+        tools: body.tools,
+        toolChoice: body.tool_choice,
       })) {
         if (chunk.done) break;
         outputTokens += 1;

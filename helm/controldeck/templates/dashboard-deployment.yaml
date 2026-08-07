@@ -22,6 +22,19 @@ spec:
           ports:
             - containerPort: {{ .Values.dashboard.port }}
           env:
+            # Next's standalone server binds to $HOSTNAME, which Kubernetes
+            # sets to the pod name — so it listens only on the pod IP. Service
+            # traffic works, but `kubectl port-forward` connects to the pod's
+            # loopback and gets nothing, which is exactly the tool an operator
+            # reaches for when something is wrong.
+            - name: HOSTNAME
+              value: "0.0.0.0"
+            # Derived from the release, not hardcoded: the Service is named
+            # after the release, so a release called anything but "controldeck"
+            # gave the dashboard an address that does not resolve. Server-side
+            # rendering talks to the in-cluster Service.
+            - name: API_BASE_URL
+              value: "http://{{ include "controldeck.fullname" . }}-router.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.router.port }}"
             {{- range $k, $v := .Values.dashboard.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

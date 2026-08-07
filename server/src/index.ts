@@ -4,6 +4,7 @@ import { sweepQueueTimeouts, sweepStallTimeouts } from "./scheduler/index.js";
 import { reconcileReplicas } from "./replicas/reconcile.js";
 import { runMigrations } from "./db/migrate.js";
 import { probeJwks } from "./auth/index.js";
+import { syncModelsFromConfigFile } from "./registry/gitops.js";
 
 /** How often to re-probe backend readiness (PRD §6.4). */
 const RECONCILE_INTERVAL_MS = Number(process.env.REPLICA_RECONCILE_INTERVAL_MS ?? 5000);
@@ -11,6 +12,25 @@ const SWEEP_INTERVAL_MS = 5000;
 
 async function main() {
   await runMigrations();
+
+  // PRD §6.2 — Helm/GitOps is the primary model registration path. This writes
+  // only the base config; dashboard edits live in model_registry_overrides and
+  // are merged on top at read time, so a redeploy never clobbers them.
+  try {
+    const synced = await syncModelsFromConfigFile();
+    if (synced) {
+      console.log(
+        `[registry] synced ${synced.upserted} model(s) from config` +
+          (synced.removed.length ? `, removed ${synced.removed.join(", ")}` : "")
+      );
+    }
+  } catch (err) {
+    // A malformed config must not take the router down: it would still serve
+    // whatever registry is already in the database, and an operator needs the
+    // dashboard up to see what is wrong.
+    console.error(`[registry] model config sync failed: ${err instanceof Error ? err.message : err}`);
+  }
+
   const app = await buildApp();
 
   // PRD §6.5 — two independent clocks, swept periodically rather than

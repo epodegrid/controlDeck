@@ -36,7 +36,12 @@ dashboard:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: 500m, memory: 512Mi }
   env:
-    NEXT_PUBLIC_API_BASE_URL: "http://controldeck-router:4000"
+    # Where the *browser* reaches the router. Server-side rendering uses the
+    # in-cluster Service (set automatically from the release name); this one
+    # has to be an address the user's browser can resolve, so it is only
+    # needed when the browser calls the API directly — the log stream does.
+    # Leave empty for a same-origin ingress path.
+    NEXT_PUBLIC_API_BASE_URL: ""
     DASHBOARD_ENTRA_CLIENT_ID: ""
     DASHBOARD_ENTRA_TENANT_ID: ""
     DASHBOARD_ADMIN_GROUP_ID: ""

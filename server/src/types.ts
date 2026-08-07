@@ -67,6 +67,7 @@ export type ChatCompletionRequest = {
   model?: string;
   messages: ChatMessage[];
   tools?: unknown[];
+  tool_choice?: unknown;
   stream?: boolean;
 };
 

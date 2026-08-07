@@ -6,6 +6,9 @@ export interface LlamaSwapClient {
     endpointUrl: string;
     messages: Array<{ role: string; content: unknown }>;
     systemPrompt?: string;
+    /** Forwarded verbatim; llama-swap owns the tool-calling handling (§6.12). */
+    tools?: unknown[];
+    toolChoice?: unknown;
   }): AsyncGenerator<ChatToken>;
   embed(params: { endpointUrl: string; input: string | string[] }): Promise<number[][]>;
 }
@@ -29,6 +32,8 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     endpointUrl: string;
     messages: Array<{ role: string; content: unknown }>;
     systemPrompt?: string;
+    tools?: unknown[];
+    toolChoice?: unknown;
   }): AsyncGenerator<ChatToken> {
     // PRD §6.11 — the per-model system prompt is a *default*, not an override.
     // If the caller sent their own system message we leave it authoritative
@@ -42,7 +47,17 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     const res = await fetch(`${params.endpointUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages, stream: true }),
+      body: JSON.stringify({
+        messages,
+        stream: true,
+        // §6.12 is explicit that tool calling is a pass-through of the
+        // backend's own handling. Dropping these was silently worse than
+        // rejecting them: the router filters on the `tools` capability and
+        // routes to a model that supports them, then removes the tools, so the
+        // caller gets a plain answer and no indication why.
+        ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
+        ...(params.toolChoice !== undefined ? { tool_choice: params.toolChoice } : {}),
+      }),
     });
     if (!res.ok) {
       // Surface the backend's standardized error instead of silently yielding
