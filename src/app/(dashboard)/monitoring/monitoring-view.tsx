@@ -27,7 +27,7 @@ export function MonitoringView({ models, errorSummary }: { models: ModelWithRepl
     <div className="grid grid-cols-12 gap-6">
       <aside className="col-span-12 lg:col-span-3 space-y-4">
         {models.map((m) => (
-          <div key={m.id} className="rounded-3xl bg-white shadow-soft-2 overflow-hidden">
+          <div key={m.id} className="rounded-3xl bg-card shadow-soft-2 overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-1">
               <p className="text-[10px] uppercase tracking-wider text-gray-2 font-medium">{m.classLabel}</p>
               <h3 className="text-[13px] font-normal mt-0.5">{m.name}</h3>
@@ -54,7 +54,7 @@ export function MonitoringView({ models, errorSummary }: { models: ModelWithRepl
       </aside>
 
       <section className="col-span-12 lg:col-span-9 space-y-4">
-        <div className="rounded-3xl bg-white shadow-soft-2 p-5 fade-in-1">
+        <div className="rounded-3xl bg-card shadow-soft-2 p-5 fade-in-1">
           {activeReplica ? (
             <>
               <div className="flex items-center justify-between mb-4">
@@ -105,7 +105,7 @@ export function MonitoringView({ models, errorSummary }: { models: ModelWithRepl
           <SmallStat label="Restart count" value="—" hint="requires K8s API, not wired in this build" />
         </div>
 
-        <div className="rounded-3xl bg-white shadow-soft-2 p-5">
+        <div className="rounded-3xl bg-card shadow-soft-2 p-5">
           <h3 className="text-[14px] font-normal mb-4">Error summary</h3>
           {errorSummary.length === 0 ? (
             <p className="text-[12px] text-gray-2 py-4 text-center">No errors in the last 24h.</p>
@@ -135,7 +135,7 @@ export function MonitoringView({ models, errorSummary }: { models: ModelWithRepl
 
 function SmallStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-2xl bg-white shadow-soft-2 p-4 lift">
+    <div className="rounded-2xl bg-card shadow-soft-2 p-4 lift">
       <p className="text-[10px] uppercase tracking-wider text-gray-2 font-medium">{label}</p>
       <p className="display-stat text-[22px] font-normal mt-1">{value}</p>
       {hint ? <p className="text-[10px] text-gray-2 mt-0.5">{hint}</p> : null}

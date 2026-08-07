@@ -3,6 +3,7 @@ import { config } from "./config.js";
 import { sweepQueueTimeouts, sweepStallTimeouts } from "./scheduler/index.js";
 import { reconcileReplicas } from "./replicas/reconcile.js";
 import { runMigrations } from "./db/migrate.js";
+import { probeJwks } from "./auth/index.js";
 
 /** How often to re-probe backend readiness (PRD §6.4). */
 const RECONCILE_INTERVAL_MS = Number(process.env.REPLICA_RECONCILE_INTERVAL_MS ?? 5000);
@@ -33,6 +34,21 @@ async function main() {
 
   await reconcile();
   setInterval(reconcile, RECONCILE_INTERVAL_MS);
+
+  // Check the identity provider is reachable, but never block startup on it.
+  // A brief Entra outage must not also take down the dashboard, the health
+  // probe and the metrics endpoint.
+  if (!config.simMode && config.jwksUri) {
+    const probe = await probeJwks(config.jwksUri);
+    if (probe.ok) {
+      app.log.info({ jwksUri: config.jwksUri }, "JWKS endpoint reachable");
+    } else {
+      app.log.error(
+        { jwksUri: config.jwksUri, detail: probe.detail },
+        "JWKS endpoint unreachable at startup — API requests will fail auth until it recovers"
+      );
+    }
+  }
 
   await app.listen({ port: config.port, host: "0.0.0.0" });
   app.log.info(

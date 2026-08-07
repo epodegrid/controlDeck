@@ -13,6 +13,17 @@
 x-mock-model: &mock-model
   build: ./mock-model
   restart: unless-stopped
+  # `docker compose up --wait` only waits for readiness where a healthcheck
+  # exists. Without this it returns while the 35B replica is still inside its
+  # 20s warm-up, and anything that starts immediately afterwards — CI, most
+  # obviously — races the fleet. /health already returns 503 until the model is
+  # loaded, so it is exactly the right probe.
+  healthcheck:
+    test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/health"]
+    interval: 3s
+    timeout: 3s
+    retries: 15
+    start_period: 25s
 
 x-ornith-env: &ornith-env
   MODEL_ID: ornith-35b
@@ -55,6 +66,22 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U controldeck"]
       interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Entra-shaped OIDC provider. Lets the dashboard sign-in flow be exercised
+  # without a tenant; see mock-oidc/ for the claim-shaping control endpoint.
+  mock-oidc:
+    build: ./mock-oidc
+    restart: unless-stopped
+    environment:
+      PORT: 9000
+      ISSUER_BASE: http://localhost:9000
+      API_AUDIENCE: api://llm-gateway
+    ports: ["9000:9000"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9000/healthz"]
+      interval: 3s
       timeout: 3s
       retries: 10
 

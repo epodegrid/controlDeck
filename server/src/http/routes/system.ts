@@ -15,7 +15,7 @@ export function registerSystemRoutes(app: FastifyInstance, deps: { kedaClient?: 
     queueTimeoutMs: QUEUE_TIMEOUT_MS,
     stallTimeoutMs: STALL_TIMEOUT_MS,
     simMode: config.simMode,
-    entraAudience: config.audience,
+    entraAudience: config.audience.join(", "),
     entraIssuer: config.issuer,
   }));
 
@@ -43,12 +43,14 @@ export function registerSystemRoutes(app: FastifyInstance, deps: { kedaClient?: 
         oid: body.oid ?? "dev-user-oid",
         name: body.name ?? "Dev User",
         preferred_username: body.name ?? "dev.user@example.com",
-        team: body.team ?? "platform",
+        // Emit the same claim the verifier reads, so sim mode exercises the
+        // real team-attribution path rather than a special case.
+        [config.teamClaim]: body.team ?? "platform",
       })
         .setProtectedHeader({ alg: "RS256", kid: "dev-key-1" })
         .setIssuedAt()
         .setIssuer(config.issuer)
-        .setAudience(config.audience)
+        .setAudience(config.audience[0])
         .setExpirationTime("2h")
         .sign(privateKey);
       return { access_token: token, token_type: "Bearer", expires_in: 7200 };

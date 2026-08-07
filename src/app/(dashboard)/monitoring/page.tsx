@@ -34,7 +34,7 @@ export default async function MonitoringPage() {
               href={grafanaUrl}
               target="_blank"
               rel="noreferrer noopener"
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-3 text-[12px] hover:bg-white transition glow-on-hover"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-3 text-[12px] hover:bg-card transition glow-on-hover"
             >
               <span className="w-1.5 h-1.5 rounded-full bg-status-green live-dot" />
               Open in Grafana →

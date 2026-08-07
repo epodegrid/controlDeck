@@ -27,8 +27,10 @@
 
   --accent: #ccf344;     /* lime — highlight ONE thing per view */
   --accent-ink: #1b2400; /* text on lime */
-  --accent-2: #9db4e8;   /* periwinkle — hero panel */
-  --accent-2-deep: #8aa4e0;
+  /* Panel tint. Chosen for measured white-text contrast (4.81:1 / 5.50:1),
+     not picked by eye — a lighter periwinkle looks right and is unreadable. */
+  --accent-2: #5a6fb4;
+  --accent-2-deep: #5166a8;
 
   --status-green: #4ba664;
   --status-yellow: #d9a520;
@@ -36,6 +38,11 @@
 
   --background: var(--paper);
   --foreground: var(--ink);
+
+  /* Switch track. Named separately so the control reads correctly in both
+     themes without the component knowing which theme is active. */
+  --switch-on: #111111;
+  --switch-off: #dcdcda;
 
   --radius-card: 22px;
   --radius-tile: 18px;
@@ -45,6 +52,71 @@
      far more than any individual curve does. */
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* ---------------------------------------------------------------------------
+   Dark theme.
+
+   Not an inversion — an inversion of this palette gives muddy greys and a lime
+   that vibrates painfully against black. The dark steps are chosen: surfaces
+   lift with elevation (page < card < tile) rather than dropping, the lime is
+   pulled down in lightness so it stops glowing, and the periwinkle is
+   deepened so white text still clears contrast on the hero panel.
+
+   Both signals are honoured: the OS preference by default, and an explicit
+   `data-theme` on <html> which always wins so the in-app toggle is authoritative.
+   ------------------------------------------------------------------------- */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0e0e10;
+    --paper-2: #141417;
+    --card: #17171a;
+
+    --ink: #f2f2f0;
+    --ink-soft: #d8d8d4;
+
+    --gray-1: #202024;
+    --gray-2: #8e8e94;
+    --gray-3: #34343a;
+
+    --accent: #b8dd3a;
+    --accent-ink: #12180a;
+    --accent-2: #5166a8;
+    --accent-2-deep: #47599b;
+
+    --status-green: #5cb877;
+    --status-yellow: #d6ac3f;
+    --status-red: #e0705f;
+
+    --switch-on: #b8dd3a;
+    --switch-off: #34343a;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #0e0e10;
+  --paper-2: #141417;
+  --card: #17171a;
+
+  --ink: #f2f2f0;
+  --ink-soft: #d8d8d4;
+
+  --gray-1: #202024;
+  --gray-2: #8e8e94;
+  --gray-3: #34343a;
+
+  --accent: #b8dd3a;
+  --accent-ink: #12180a;
+  --accent-2: #5166a8;
+  --accent-2-deep: #47599b;
+
+  --status-green: #5cb877;
+  --status-yellow: #d6ac3f;
+  --status-red: #e0705f;
+
+  --switch-on: #b8dd3a;
+  --switch-off: #34343a;
 }
 
 @theme inline {
@@ -192,6 +264,52 @@ body {
   0% { transform: translate3d(0, 0, 0) scale(1); }
   100% { transform: translate3d(2%, -1.5%, 0) scale(1.05); }
 }
+
+/* On a dark surface a drop shadow is invisible, so elevation has to come from
+   a hairline and a lifted fill instead. Applied to both theme signals. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .card,
+  :root:not([data-theme="light"]) .shadow-soft-2 {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+  }
+  :root:not([data-theme="light"]) .shadow-soft,
+  :root:not([data-theme="light"]) .card-shadow {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+  }
+  :root:not([data-theme="light"]) .shadow-soft-3,
+  :root:not([data-theme="light"]) .shadow-float {
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.07),
+      0 24px 60px -24px rgba(0, 0, 0, 0.7);
+  }
+  :root:not([data-theme="light"]) .lift:hover {
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.12),
+      0 18px 40px -18px rgba(0, 0, 0, 0.6);
+  }
+  :root:not([data-theme="light"]) .ambient-wash::before { display: none; }
+}
+
+:root[data-theme="dark"] .card,
+:root[data-theme="dark"] .shadow-soft-2 {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .shadow-soft,
+:root[data-theme="dark"] .card-shadow {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .shadow-soft-3,
+:root[data-theme="dark"] .shadow-float {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.07),
+    0 24px 60px -24px rgba(0, 0, 0, 0.7);
+}
+:root[data-theme="dark"] .lift:hover {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12),
+    0 18px 40px -18px rgba(0, 0, 0, 0.6);
+}
+:root[data-theme="dark"] .ambient-wash::before { display: none; }
 
 /* ---------------------------------------------------------------------------
    Signature motifs
@@ -440,7 +558,7 @@ a {
 }
 
 .signature-gradient {
-  background-image: linear-gradient(135deg, var(--accent-2) 0%, #ffffff 52%, var(--accent) 100%);
+  background-image: linear-gradient(135deg, var(--accent-2) 0%, var(--paper) 52%, var(--accent) 100%);
 }
 
 /* Device chrome, used only on the overview hero. */

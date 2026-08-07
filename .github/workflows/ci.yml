@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Matches the Dockerfiles, so CI cannot pass on a runtime the images don't use.
+  NODE_VERSION: "22"
+
+jobs:
+  server:
+    name: Server — typecheck & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      # The suite is DB-backed by design — it provisions and migrates its own
+      # `controldeck_test` database rather than mocking Postgres away, so the
+      # SQL in scheduler placement and cost aggregation is genuinely exercised.
+      - name: Start Postgres
+        run: docker compose up -d --wait postgres
+
+      - run: npm ci
+        working-directory: server
+
+      - run: npm run typecheck
+        working-directory: server
+
+      - run: npm test
+        working-directory: server
+
+  dashboard:
+    name: Dashboard — typecheck & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - run: npm ci
+
+      - run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+        env:
+          # Required in production mode; the value is irrelevant to a build.
+          DASHBOARD_SESSION_SECRET: ci-build-secret-at-least-32-characters-long
+
+  e2e:
+    name: End-to-end (production auth mode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - run: npm ci
+      - run: npm ci
+        working-directory: server
+
+      # Postgres, the Entra-shaped OIDC provider, and the mock model replicas.
+      # These tests run the dashboard behind real SSO with real signed tokens,
+      # so the identity provider has to be genuinely present.
+      - name: Start supporting stack
+        run: docker compose up -d --wait
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run e2e
+        run: npm run e2e
+
+      # The report is the only way to diagnose a failure that doesn't reproduce
+      # locally, so keep it when — and only when — something failed.
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
+      - name: Container logs on failure
+        if: failure()
+        run: docker compose logs --tail=100

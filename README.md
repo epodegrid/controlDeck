@@ -134,6 +134,8 @@ All shared state lives in Postgres, which is what lets the router run multiple r
 | `server/src/sim/` | Traffic simulator — sim mode only |
 | `src/` | Dashboard. Next.js App Router, server components |
 | `mock-model/` | Dependency-free stand-in for a llama-swap replica |
+| `mock-oidc/` | Entra-shaped OIDC provider, for testing sign-in without a tenant |
+| `docs/entra-setup.md` | App registration, optional claims, acceptance checklist |
 | `helm/controldeck/` | Deployment chart |
 | `prd/` | Product requirements |
 
@@ -149,8 +151,12 @@ All shared state lives in Postgres, which is what lets the router run multiple r
 | `PORT` | `4000` | |
 | `SIM_MODE` | unset | `true` enables dev tokens, seeding, and the simulator |
 | `ENTRA_JWKS_URI` | — | **Required in production.** Your tenant's JWKS endpoint |
-| `ENTRA_AUDIENCE` | `api://llm-gateway` | Must match the `aud` your callers' tokens carry |
+| `ENTRA_AUDIENCE` | `api://llm-gateway` | Accepted `aud` values, comma-separated |
 | `ENTRA_ISSUER` | — | Expected `iss` claim |
+| `ENTRA_TENANT_ID` | — | Optional; pins the token's `tid` claim |
+| `TEAM_CLAIM` | `department` | Directory claim carrying the caller's team |
+| `ENTRA_JWKS_TIMEOUT_MS` | `5000` | JWKS fetch timeout |
+| `ENTRA_JWKS_CACHE_MS` | `600000` | How long a fetched key set is reused |
 | `MODEL_BACKEND` | auto | `http` for real backends, `fake` for an in-process stub |
 | `MODEL_ENDPOINT_<MODEL_ID>` | — | Base address for a model, e.g. `MODEL_ENDPOINT_ORNITH_35B` |
 | `MODEL_REPLICAS_<MODEL_ID>` | — | Comma-separated per-replica addresses; takes precedence |
@@ -176,6 +182,22 @@ Model ids become env var names by upper-casing and replacing `-` with `_`.
 | `GRAFANA_URL` | — | When set, Monitoring shows a link out to it |
 
 Register the redirect URI `${DASHBOARD_APP_URL}/api/auth/callback` in your Entra app registration, and configure it to emit **group claims** if you're using `DASHBOARD_ADMIN_GROUP_ID`.
+
+### Identity, teams, and testing without a tenant
+
+Full setup — app registrations, the optional claims that decide whether your
+audit trail shows names or GUIDs, and a one-page acceptance checklist — is in
+**[docs/entra-setup.md](docs/entra-setup.md)**.
+
+Two things worth knowing up front:
+
+- **Caller names and teams come from optional claims.** Entra access tokens omit
+  `name` and `department` unless the app registration adds them. The router
+  serves those callers regardless (falling back to `preferred_username`, then
+  `oid`), but cost-by-team stays empty until `department` is configured.
+- **You can test the whole flow without a tenant.** `docker compose up -d mock-oidc`
+  starts an Entra-shaped provider with a control endpoint for reproducing
+  awkward cases — missing claims, group-claim overage, token-exchange failure.
 
 ---
 
@@ -250,7 +272,7 @@ Live mode carries an *expectation* with every request — which model should ser
 
 ```bash
 cd server
-npm test           # 75 tests against a dedicated test database
+npm test           # unit + integration, against a dedicated test database
 npm run typecheck
 ```
 
@@ -261,6 +283,25 @@ The suite provisions and migrates `controldeck_test` automatically, so `npm test
 npx tsc --noEmit   # dashboard typecheck
 npm run build      # production build
 ```
+
+### End-to-end tests
+
+```bash
+docker compose up -d     # postgres, mock-oidc, mock model replicas
+npm run e2e              # or: npm run e2e:ui
+```
+
+These run the dashboard in **production auth mode** — real SSO, real signed
+tokens — against the bundled mock Entra provider, on their own ports (router
+`:4100`, dashboard `:3100`) so they never disturb a running dev stack. Sim mode
+is deliberately not used: it bypasses sign-in, which is most of what these
+tests exist to check.
+
+Covered: the full authorization-code + PKCE flow, admin-group enforcement,
+sign-out, token-exchange failure, tampered callback state, sign-in when Entra
+omits `name`/`department`, group-claim overage, content-logging toggle
+persistence, switch geometry, theme persistence, horizontal overflow, and that
+no view leaks a raw ISO timestamp.
 
 ### Notes on the codebase
 

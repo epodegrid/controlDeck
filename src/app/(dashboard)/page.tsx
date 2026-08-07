@@ -75,7 +75,7 @@ export default async function OverviewPage() {
                 Hello, {session?.name.split(" ")[0] ?? "there"}!
               </h1>
               <p className="text-[26px] leading-tight ghost-italic -mt-1">Operations overview</p>
-              <p className="text-[12.5px] opacity-70 mt-3 leading-relaxed">
+              <p className="text-[12.5px] opacity-85 mt-3 leading-relaxed">
                 Replicas scale on demand through KEDA. Everything below is live.
               </p>
             </div>
@@ -92,7 +92,7 @@ export default async function OverviewPage() {
 
             <div className="grid grid-cols-3 gap-3 mb-7">
               {[
-                { dot: "bg-white", label: "Ready", value: ready },
+                { dot: "bg-card", label: "Ready", value: ready },
                 { dot: "bg-white/55", label: "Loading", value: loading },
                 { dot: "bg-white/30", label: "Down", value: down },
               ].map((s, i) => (
@@ -102,7 +102,7 @@ export default async function OverviewPage() {
                 >
                   <div className="flex items-center gap-1.5 mb-1.5">
                     <span className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
-                    <span className="text-[10px] uppercase tracking-[0.14em] opacity-70">{s.label}</span>
+                    <span className="text-[10px] uppercase tracking-[0.14em] opacity-80">{s.label}</span>
                   </div>
                   <p className="stat-md text-[26px]">{s.value}</p>
                 </div>
@@ -110,7 +110,7 @@ export default async function OverviewPage() {
             </div>
 
             <div className="mt-auto pt-6 border-t border-white/20">
-              <p className="text-[10px] uppercase tracking-[0.14em] opacity-70 mb-2">Requests · 24h</p>
+              <p className="text-[10px] uppercase tracking-[0.14em] opacity-80 mb-2">Requests · 24h</p>
               <div className="flex items-baseline">
                 <span className="stat-hero text-[58px]">{fmtGrouped(total24h)}</span>
                 <span className="text-[15px] italic opacity-70 ml-2">req</span>

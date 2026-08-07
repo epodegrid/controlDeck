@@ -20,9 +20,25 @@ const simMode = process.env.SIM_MODE === "true" || process.env.USE_FAKE_ADAPTERS
 export const config = {
   port: Number(process.env.PORT ?? 4000),
   simMode,
-  audience: process.env.ENTRA_AUDIENCE ?? "api://llm-gateway",
+  /**
+   * Accepted audiences, comma-separated. Usually one — this API's Application
+   * ID URI. A second entry is occasionally needed while migrating a client
+   * from the bare client id to `api://<id>`.
+   */
+  audience: (process.env.ENTRA_AUDIENCE ?? "api://llm-gateway")
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean),
   issuer: process.env.ENTRA_ISSUER ?? "https://login.microsoftonline.com/dev-tenant/v2.0",
   jwksUri: process.env.ENTRA_JWKS_URI ?? "",
+  /** Optional tenant pin; only meaningful with a multi-tenant issuer. */
+  tenantId: process.env.ENTRA_TENANT_ID ?? "",
+  /**
+   * Directory claim carrying the caller's team (PRD §6.7 cost-by-team, §6.8
+   * per-team logging scopes). Entra has no `team` claim, so a tenant surfaces
+   * one as an optional claim — `department` is the usual choice.
+   */
+  teamClaim: process.env.TEAM_CLAIM ?? "department",
 };
 
 let devSigningKey: { privateKey: KeyLike; jwks: { keys: JWK[] } } | null = null;

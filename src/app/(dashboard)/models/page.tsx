@@ -46,7 +46,7 @@ export default async function ModelsPage() {
           return (
             <div
               key={m.id}
-              className="rounded-3xl bg-white shadow-soft-2 overflow-hidden fade-in lift"
+              className="rounded-3xl bg-card shadow-soft-2 overflow-hidden fade-in lift"
               style={{ animationDelay: `${i * 80}ms` }}
             >
               <div className="relative">

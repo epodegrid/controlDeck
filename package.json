@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "dev:sim": "SIM_MODE=true next dev",
-    "start:sim": "SIM_MODE=true next start"
+    "start:sim": "SIM_MODE=true next start",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "jose": "^6.2.8",
@@ -17,6 +19,7 @@
     "recharts": "^3.10.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

@@ -4,8 +4,25 @@ import type { JWKSSource } from "./jwks-source.js";
 
 export type VerifyBearerTokenOptions = {
   jwks: JWKSSource;
-  audience: string;
+  /** Accepts a list so a gateway can serve callers holding tokens for more
+   *  than one registered audience (e.g. `api://<id>` and the bare client id). */
+  audience: string | string[];
   issuer: string;
+  /**
+   * Directory claim carrying the caller's team, used for cost attribution and
+   * audit scoping. Entra emits no `team` claim; operators surface one through
+   * an optional claim such as `department`. Configurable because the attribute
+   * a tenant uses for this is a tenant decision.
+   */
+  teamClaim?: string;
+  /**
+   * When set, the token's `tid` must match. Only meaningful if `issuer` is a
+   * multi-tenant endpoint — with a tenant-pinned issuer the issuer check
+   * already constrains the tenant.
+   */
+  tenantId?: string;
+  /** Seconds of clock skew tolerated between us and the token issuer. */
+  clockToleranceSec?: number;
 };
 
 export type VerifyBearerTokenResult =
@@ -25,6 +42,11 @@ function authInvalid(message: string): { ok: false; error: StandardError } {
   };
 }
 
+/** Returns the value only if it is a non-empty string. */
+function firstString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function extractBearerToken(authorizationHeader: string | undefined): string | null {
   if (!authorizationHeader) return null;
   const match = /^Bearer\s+(.+)$/.exec(authorizationHeader);
@@ -36,8 +58,8 @@ function extractBearerToken(authorizationHeader: string | undefined): string | n
 
 /**
  * Validates an incoming request's bearer token against an Entra-style JWKS
- * endpoint: checks signature, expiry, issuer, and audience explicitly.
- * Never throws — always resolves to a discriminated union result.
+ * endpoint: checks signature, algorithm, expiry, issuer, and audience
+ * explicitly. Never throws — always resolves to a discriminated union result.
  */
 export async function verifyBearerToken(
   authorizationHeader: string | undefined,
@@ -56,6 +78,13 @@ export async function verifyBearerToken(
       const result = await jwtVerify(token, opts.jwks.getKey, {
         issuer: opts.issuer,
         audience: opts.audience,
+        // Pin the algorithm. Without this the accepted set is whatever the
+        // resolved key permits, which is how algorithm-confusion bugs start.
+        algorithms: ["RS256"],
+        // Entra and this service will not agree on the clock to the second,
+        // and a token rejected for being one second early is indistinguishable
+        // from a real auth failure to the caller.
+        clockTolerance: opts.clockToleranceSec ?? 60,
       });
       payload = result.payload;
     } catch (err) {
@@ -77,21 +106,27 @@ export async function verifyBearerToken(
       return authInvalid('Token is missing the required "oid" claim.');
     }
 
-    const name =
-      (typeof payload.name === "string" && payload.name) ||
-      (typeof payload.preferred_username === "string" && payload.preferred_username) ||
-      undefined;
-    if (!name) {
-      return authInvalid('Token is missing a usable "name" or "preferred_username" claim.');
+    if (opts.tenantId) {
+      const tid = typeof payload.tid === "string" ? payload.tid : undefined;
+      if (tid !== opts.tenantId) {
+        return authInvalid("Token was issued by a different tenant than this gateway accepts.");
+      }
     }
 
-    const teamClaim = payload.team ?? payload.groups;
-    let team: string | undefined;
-    if (typeof teamClaim === "string") {
-      team = teamClaim;
-    } else if (Array.isArray(teamClaim) && typeof teamClaim[0] === "string") {
-      team = teamClaim[0];
-    }
+    // A display name is nice to have, not a reason to refuse service. Entra
+    // access tokens frequently omit `name` unless the app registration adds it
+    // as an optional claim, and rejecting those tokens would turn a cosmetic
+    // gap into an outage. Fall back through the usable identifiers and, in the
+    // last resort, attribute the request to the caller's object id — which is
+    // always present and is what the audit trail actually keys on.
+    const name =
+      firstString(payload.name) ??
+      firstString(payload.preferred_username) ??
+      firstString(payload.upn) ??
+      firstString(payload.email) ??
+      oid;
+
+    const team = firstString(payload[opts.teamClaim ?? "department"]);
 
     const identity: CallerIdentity = {
       oid,

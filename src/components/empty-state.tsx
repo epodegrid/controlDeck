@@ -20,7 +20,7 @@ export function EmptyState({
   action?: { label: string; href: string };
 }) {
   return (
-    <div className="rounded-3xl bg-white shadow-soft-2 px-8 py-14 text-center">
+    <div className="rounded-3xl bg-card shadow-soft-2 px-8 py-14 text-center">
       <div
         className="w-10 h-10 rounded-xl bg-gray-1 mx-auto mb-4 flex items-center justify-center"
         aria-hidden="true"
@@ -56,7 +56,7 @@ export function EmptyState({
  */
 export function ConnectionError({ detail }: { detail?: string }) {
   return (
-    <div className="rounded-3xl bg-white shadow-soft-2 px-8 py-14 text-center">
+    <div className="rounded-3xl bg-card shadow-soft-2 px-8 py-14 text-center">
       <div className="w-10 h-10 rounded-xl bg-status-red/10 mx-auto mb-4 flex items-center justify-center" aria-hidden="true">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-status-red">
           <path d="M12 9v4M12 17h.01" strokeLinecap="round" />

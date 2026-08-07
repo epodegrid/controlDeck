@@ -1,5 +1,6 @@
 import { api, type Overview } from "@/lib/api";
 import type { Session } from "@/lib/auth";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const healthColor: Record<string, string> = {
   green: "bg-status-green",
@@ -54,6 +55,8 @@ export async function TopBar({ session }: { session: Session }) {
       </div>
 
       <div className="ml-auto flex items-center gap-3">
+        <ThemeToggle />
+
         {session.simulated ? (
           <span
             className="anno-chip"

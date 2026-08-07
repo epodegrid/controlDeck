@@ -90,7 +90,7 @@ export default async function RequestsPage() {
       </div>
 
       <div className="grid grid-cols-12 gap-6 mb-8">
-        <div className="col-span-12 lg:col-span-7 rounded-3xl bg-white shadow-soft-2 overflow-hidden lift">
+        <div className="col-span-12 lg:col-span-7 rounded-3xl bg-card shadow-soft-2 overflow-hidden lift">
           <div className="relative">
             <div
               className="absolute inset-x-0 top-0 h-px"
@@ -122,7 +122,7 @@ export default async function RequestsPage() {
           )}
         </div>
 
-        <div className="col-span-12 lg:col-span-5 rounded-3xl bg-white shadow-soft-2 overflow-hidden lift">
+        <div className="col-span-12 lg:col-span-5 rounded-3xl bg-card shadow-soft-2 overflow-hidden lift">
           <div className="relative">
             <div
               className="absolute inset-x-0 top-0 h-px"
@@ -178,7 +178,7 @@ export default async function RequestsPage() {
         </div>
       </div>
 
-      <div className="rounded-3xl bg-white shadow-soft-2 overflow-hidden">
+      <div className="rounded-3xl bg-card shadow-soft-2 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-1">
           <div className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-status-red" />

@@ -13,7 +13,7 @@ function PeriodTabs({ period }: { period: string }) {
           key={p}
           href={`/cost?period=${p}`}
           className={`px-3 py-1 rounded-md transition ${
-            p === period ? "bg-white card-shadow font-medium" : "text-gray-2 hover:text-ink"
+            p === period ? "bg-card card-shadow font-medium" : "text-gray-2 hover:text-ink"
           }`}
         >
           {p}
@@ -108,7 +108,7 @@ export default async function CostPage({ searchParams }: { searchParams: Promise
       </div>
 
       <div className="grid grid-cols-12 gap-6 mb-8">
-        <div className="col-span-12 lg:col-span-7 rounded-3xl bg-white shadow-soft-2 p-6 fade-in-1">
+        <div className="col-span-12 lg:col-span-7 rounded-3xl bg-card shadow-soft-2 p-6 fade-in-1">
           <div className="flex items-center justify-between mb-5">
             <h3 className="text-[14px] font-normal">By model</h3>
             <span className="text-[11px] text-gray-2">tokens served</span>
@@ -132,7 +132,7 @@ export default async function CostPage({ searchParams }: { searchParams: Promise
           </div>
         </div>
 
-        <div className="col-span-12 lg:col-span-5 rounded-3xl bg-white shadow-soft-2 p-6 fade-in-2">
+        <div className="col-span-12 lg:col-span-5 rounded-3xl bg-card shadow-soft-2 p-6 fade-in-2">
           <div className="flex items-center justify-between mb-5">
             <h3 className="text-[14px] font-normal">By caller</h3>
             <span className="text-[11px] text-gray-2">$ · {period}</span>
@@ -157,7 +157,7 @@ export default async function CostPage({ searchParams }: { searchParams: Promise
         </div>
       </div>
 
-      <div className="rounded-3xl bg-white shadow-soft-2 p-6">
+      <div className="rounded-3xl bg-card shadow-soft-2 p-6">
         <div className="flex items-center justify-between mb-7">
           <div>
             <h3 className="text-[14px] font-normal">Hourly distribution</h3>

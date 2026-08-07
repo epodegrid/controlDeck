@@ -41,6 +41,19 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${jost.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        {/*
+          Applies the stored theme before first paint. This has to be a
+          blocking inline script: anything deferred to hydration means a dark-
+          mode user gets a white flash on every navigation. It only ever sets
+          an attribute, so there is nothing here to inject.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('cd-theme');if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}})();`,
+          }}
+        />
+      </head>
       {/* Browser extensions (Grammarly, password managers) inject attributes
           into <body> before React hydrates, which otherwise reports as a
           hydration mismatch that no application change can fix. */}

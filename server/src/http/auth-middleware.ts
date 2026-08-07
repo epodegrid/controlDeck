@@ -20,6 +20,8 @@ export function createAuthPreHandler(jwks: JWKSSource) {
       jwks,
       audience: config.audience,
       issuer: config.issuer,
+      teamClaim: config.teamClaim,
+      ...(config.tenantId ? { tenantId: config.tenantId } : {}),
     });
     if (!result.ok) {
       reply.code(statusForError(result.error)).send(result.error);

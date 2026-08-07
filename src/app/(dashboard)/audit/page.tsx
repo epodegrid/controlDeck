@@ -110,7 +110,7 @@ export default async function AuditPage({
         <KpiTile label="Retention" value="∞" hint="manual purge" />
       </div>
 
-      <div className="rounded-3xl bg-white shadow-soft-2 p-6 mb-8 fade-in-1">
+      <div className="rounded-3xl bg-card shadow-soft-2 p-6 mb-8 fade-in-1">
         <div className="flex items-center justify-between mb-5">
           <div>
             <h3 className="text-[14px] font-normal">Content-logging toggles</h3>
@@ -163,7 +163,7 @@ export default async function AuditPage({
         </details>
       </div>
 
-      <div className="rounded-3xl bg-white shadow-soft-2 overflow-hidden">
+      <div className="rounded-3xl bg-card shadow-soft-2 overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-1">
           <h3 className="text-[14px] font-normal">Recent requests</h3>
           <form method="GET" className="flex items-center gap-2">

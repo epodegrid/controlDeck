@@ -37,9 +37,11 @@ describe("verifyBearerToken", () => {
     oid?: string;
     name?: string;
     preferred_username?: string;
-    team?: string;
+    /** Extra claims merged into the payload, e.g. `department`, `tid`, `upn`. */
+    claims?: Record<string, unknown>;
     signingKey?: KeyLike;
     kidOverride?: string;
+    notBeforeSecondsFromNow?: number;
   } = {}) {
     const {
       issuer = ISSUER,
@@ -47,9 +49,10 @@ describe("verifyBearerToken", () => {
       expSecondsFromNow = 3600,
       oid = "abc-123-oid",
       preferred_username,
-      team,
+      claims = {},
       signingKey = privateKey,
       kidOverride = kid,
+      notBeforeSecondsFromNow,
     } = overrides;
     const name = "name" in overrides ? overrides.name : "Jane Doe";
 
@@ -57,7 +60,7 @@ describe("verifyBearerToken", () => {
       oid,
       ...(name ? { name } : {}),
       ...(preferred_username ? { preferred_username } : {}),
-      ...(team ? { team } : {}),
+      ...claims,
     })
       .setProtectedHeader({ alg: "RS256", kid: kidOverride })
       .setIssuedAt()
@@ -65,11 +68,15 @@ describe("verifyBearerToken", () => {
       .setAudience(audience)
       .setExpirationTime(Math.floor(Date.now() / 1000) + expSecondsFromNow);
 
+    if (notBeforeSecondsFromNow !== undefined) {
+      builder = builder.setNotBefore(Math.floor(Date.now() / 1000) + notBeforeSecondsFromNow);
+    }
+
     return builder.sign(signingKey);
   }
 
   it("returns ok with identity for a valid token", async () => {
-    const token = await signToken({ team: "platform" });
+    const token = await signToken({ claims: { department: "platform" } });
     const result = await verifyBearerToken(`Bearer ${token}`, {
       jwks: jwksSource,
       audience: AUDIENCE,

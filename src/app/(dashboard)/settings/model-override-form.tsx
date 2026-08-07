@@ -62,7 +62,7 @@ export function ModelOverrideForm({
         <label className="text-[11px] text-gray-2">
           Min replicas
           <input
-            className="mt-1 w-full px-2 py-1 rounded-md border border-gray-3 bg-white font-mono text-[12px] outline-none focus:ring-2 focus:ring-ink/10"
+            className="mt-1 w-full px-2 py-1 rounded-md border border-gray-3 bg-card font-mono text-[12px] outline-none focus:ring-2 focus:ring-ink/10"
             value={min}
             onChange={(e) => setMin(e.target.value)}
             inputMode="numeric"
@@ -71,7 +71,7 @@ export function ModelOverrideForm({
         <label className="text-[11px] text-gray-2">
           Max replicas
           <input
-            className="mt-1 w-full px-2 py-1 rounded-md border border-gray-3 bg-white font-mono text-[12px] outline-none focus:ring-2 focus:ring-ink/10"
+            className="mt-1 w-full px-2 py-1 rounded-md border border-gray-3 bg-card font-mono text-[12px] outline-none focus:ring-2 focus:ring-ink/10"
             value={max}
             onChange={(e) => setMax(e.target.value)}
             inputMode="numeric"
@@ -81,7 +81,7 @@ export function ModelOverrideForm({
       <label className="text-[11px] text-gray-2 block">
         Cost value
         <input
-          className="mt-1 w-full px-2 py-1 rounded-md border border-gray-3 bg-white font-mono text-[12px] outline-none focus:ring-2 focus:ring-ink/10"
+          className="mt-1 w-full px-2 py-1 rounded-md border border-gray-3 bg-card font-mono text-[12px] outline-none focus:ring-2 focus:ring-ink/10"
           value={cost}
           onChange={(e) => setCost(e.target.value)}
           inputMode="decimal"
@@ -90,7 +90,7 @@ export function ModelOverrideForm({
       <label className="text-[11px] text-gray-2 block">
         System prompt
         <textarea
-          className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-3 bg-white font-mono text-[11px] outline-none focus:ring-2 focus:ring-ink/10 resize-y"
+          className="mt-1 w-full px-2 py-1.5 rounded-md border border-gray-3 bg-card font-mono text-[11px] outline-none focus:ring-2 focus:ring-ink/10 resize-y"
           rows={3}
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}

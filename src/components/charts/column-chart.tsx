@@ -12,6 +12,19 @@
  */
 export type Column = { label: string; value: number };
 
+/**
+ * Axis labels arrive from the API as ISO timestamps, which are unreadable on
+ * an axis. Formatted in explicit UTC rather than the ambient locale: this
+ * renders on the server, and a timezone-dependent string would differ from
+ * what the client computes and trip a hydration mismatch.
+ */
+function formatAxisLabel(label: string): string {
+  const parsed = Date.parse(label);
+  if (Number.isNaN(parsed)) return label;
+  const d = new Date(parsed);
+  return `${String(d.getUTCHours()).padStart(2, "0")}:00`;
+}
+
 export function ColumnChart({
   data,
   height = 200,
@@ -74,7 +87,7 @@ export function ColumnChart({
                   style={{ bottom: barHeight + 8 }}
                 >
                   <span className="anno-chip-soft bg-ink text-white whitespace-nowrap">
-                    {d.label} · {d.value.toLocaleString()}
+                    {formatAxisLabel(d.label)} · {d.value.toLocaleString()}
                     {unit}
                   </span>
                 </div>
@@ -96,7 +109,7 @@ export function ColumnChart({
           {data
             .filter((_, i) => i % Math.ceil(data.length / 5) === 0)
             .map((d, i) => (
-              <span key={`${d.label}-tick-${i}`}>{d.label}</span>
+              <span key={`${d.label}-tick-${i}`}>{formatAxisLabel(d.label)}</span>
             ))}
         </div>
         {footerValue ? (

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { Switch } from "@/components/switch";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
 
@@ -10,11 +11,13 @@ export function LoggingToggle({
   scopeKey,
   on,
   pending,
+  label,
 }: {
   scopeType: "global" | "team" | "model" | "key";
   scopeKey: string;
   on: boolean;
   pending?: boolean;
+  label?: string;
 }) {
   const router = useRouter();
   const [isSaving, startTransition] = useTransition();
@@ -23,6 +26,9 @@ export function LoggingToggle({
   async function toggle() {
     if (pending) return;
     const next = !optimisticOn;
+    // Move the knob immediately; content-logging scope changes are a
+    // single-row upsert, and waiting on the round-trip makes the control feel
+    // broken even when it is working.
     setOptimisticOn(next);
     try {
       const res = await fetch(`${API_BASE_URL}/api/audit/logging-config`, {
@@ -39,19 +45,12 @@ export function LoggingToggle({
   }
 
   return (
-    <button
-      aria-pressed={optimisticOn}
-      onClick={toggle}
-      disabled={pending || isSaving}
-      className={`relative w-9 h-5 rounded-full transition ${
-        pending ? "bg-gray-3 cursor-not-allowed" : optimisticOn ? "bg-status-green" : "bg-gray-3"
-      } ${isSaving ? "opacity-60" : ""}`}
-    >
-      <span
-        className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-          optimisticOn ? "translate-x-4" : "translate-x-0.5"
-        }`}
-      />
-    </button>
+    <Switch
+      checked={optimisticOn}
+      onChange={toggle}
+      disabled={pending}
+      busy={isSaving}
+      label={label ?? `Content logging for ${scopeType}${scopeKey ? ` ${scopeKey}` : ""}`}
+    />
   );
 }

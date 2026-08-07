@@ -29,23 +29,42 @@ export const authConfig = {
   clientId: process.env.DASHBOARD_ENTRA_CLIENT_ID ?? "",
   clientSecret: process.env.DASHBOARD_ENTRA_CLIENT_SECRET ?? "",
   adminGroupId: process.env.DASHBOARD_ADMIN_GROUP_ID ?? "",
+  /**
+   * App role granting admin access, e.g. `Admin`.
+   *
+   * Preferred over a group id. The `roles` claim is scoped to this single
+   * application, so it cannot overflow the way `groups` does — past ~200
+   * groups Entra stops sending the list entirely and substitutes a Graph
+   * pointer, which silently locks out exactly the people who are in the most
+   * groups. It is also the better question to ask: "is this person an admin of
+   * this application" rather than "what groups is this person in".
+   */
+  adminRole: process.env.DASHBOARD_ADMIN_ROLE ?? "",
   appUrl: process.env.DASHBOARD_APP_URL ?? "http://localhost:3000",
   /**
-   * Entra endpoints are derived from the tenant id rather than fetched from a
-   * discovery document: PRD §8 forbids unconfigured outbound calls, and OIDC
-   * discovery would be exactly that.
+   * Identity authority host. Configurable because "Entra" is not one endpoint:
+   * sovereign clouds live elsewhere (`login.microsoftonline.us` for Azure
+   * Government, `login.chinacloudapi.cn` for China), and pointing this at the
+   * bundled mock provider is what makes the sign-in flow testable without a
+   * tenant.
+   */
+  authority: (process.env.DASHBOARD_ENTRA_AUTHORITY ?? "https://login.microsoftonline.com").replace(/\/+$/, ""),
+  /**
+   * Endpoints are derived from the authority and tenant id rather than fetched
+   * from a discovery document: PRD §8 forbids unconfigured outbound calls, and
+   * OIDC discovery would be exactly that.
    */
   get authorizeUrl() {
-    return `https://login.microsoftonline.com/${this.tenantId}/oauth2/v2.0/authorize`;
+    return `${this.authority}/${this.tenantId}/oauth2/v2.0/authorize`;
   },
   get tokenUrl() {
-    return `https://login.microsoftonline.com/${this.tenantId}/oauth2/v2.0/token`;
+    return `${this.authority}/${this.tenantId}/oauth2/v2.0/token`;
   },
   get jwksUri() {
-    return `https://login.microsoftonline.com/${this.tenantId}/discovery/v2.0/keys`;
+    return `${this.authority}/${this.tenantId}/discovery/v2.0/keys`;
   },
   get issuer() {
-    return `https://login.microsoftonline.com/${this.tenantId}/v2.0`;
+    return `${this.authority}/${this.tenantId}/v2.0`;
   },
   get redirectUri() {
     return `${this.appUrl}/api/auth/callback`;
@@ -129,6 +148,40 @@ export async function getSession(): Promise<Session | null> {
   }
 }
 
+/**
+ * Explains *why* access was refused, distinguishing the three causes that look
+ * identical from the outside — genuinely not a member, the claim was never
+ * configured, or the claim overflowed. Without this an operator sees "not a
+ * member" for a user who demonstrably is one, and has nothing to go on.
+ */
+function accessDeniedMessage(payload: Record<string, unknown>): string {
+  const overflowed =
+    typeof payload._claim_names === "object" &&
+    payload._claim_names !== null &&
+    "groups" in (payload._claim_names as Record<string, unknown>);
+
+  if (overflowed) {
+    return (
+      "Your group membership could not be read from the sign-in token. This account belongs to " +
+      "too many groups for Entra to list them in a token, so it sent a lookup reference instead. " +
+      "Fix this by granting admin access with an app role (DASHBOARD_ADMIN_ROLE) instead of a " +
+      "group id, or by setting the app registration's groups claim to " +
+      '"Groups assigned to the application".'
+    );
+  }
+
+  const configured: string[] = [];
+  if (authConfig.adminRole) configured.push(`app role "${authConfig.adminRole}"`);
+  if (authConfig.adminGroupId) configured.push("the configured admin group");
+
+  return (
+    `Your account does not hold ${configured.join(" or ")}. ` +
+    "If you believe it should, check that the app registration is configured to emit the " +
+    "corresponding roles or groups claim — a claim that is never issued looks identical to one " +
+    "you are not a member of."
+  );
+}
+
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 
 /**
@@ -151,19 +204,21 @@ export async function sessionFromIdToken(
     return { ok: false, error: `Token validation failed: ${err instanceof Error ? err.message : "unknown"}` };
   }
 
-  // §6.1: authorization is group membership, nothing else. When an admin group
-  // is configured we require it; leaving it unset means any tenant member who
-  // can reach the dashboard may use it, which is a deliberate operator choice.
-  if (authConfig.adminGroupId) {
-    const groups = Array.isArray(payload.groups) ? (payload.groups as string[]) : [];
-    if (!groups.includes(authConfig.adminGroupId)) {
-      return {
-        ok: false,
-        error:
-          "Your account is not a member of the configured admin group. " +
-          "If the group claim is missing entirely, check that the app registration emits group claims.",
-      };
-    }
+  // §6.1: authorization is directory membership, nothing else — there is no
+  // platform-side role table. Either an app role or a group may be configured;
+  // satisfying any configured check is enough, so a tenant can migrate from
+  // groups to roles without a flag day. Configuring neither means any tenant
+  // member who can reach the dashboard may use it, which is a deliberate
+  // operator choice rather than an oversight.
+  const roles = Array.isArray(payload.roles) ? (payload.roles as string[]) : [];
+  const groups = Array.isArray(payload.groups) ? (payload.groups as string[]) : [];
+
+  const checks: boolean[] = [];
+  if (authConfig.adminRole) checks.push(roles.includes(authConfig.adminRole));
+  if (authConfig.adminGroupId) checks.push(groups.includes(authConfig.adminGroupId));
+
+  if (checks.length > 0 && !checks.some(Boolean)) {
+    return { ok: false, error: accessDeniedMessage(payload) };
   }
 
   const name = String(payload.name ?? payload.preferred_username ?? "Unknown");

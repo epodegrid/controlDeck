@@ -37,7 +37,7 @@ export default async function SettingsPage() {
       ) : null}
 
       <div className="space-y-6">
-        <div className="rounded-3xl bg-white shadow-soft-2 p-6 fade-in-1">
+        <div className="rounded-3xl bg-card shadow-soft-2 p-6 fade-in-1">
           <div className="flex items-baseline justify-between mb-5">
             <div>
               <h3 className="text-[14px] font-normal">Model registry</h3>
@@ -104,7 +104,7 @@ export default async function SettingsPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <div className="rounded-3xl bg-white shadow-soft-2 p-6 fade-in-2">
+          <div className="rounded-3xl bg-card shadow-soft-2 p-6 fade-in-2">
             <h3 className="text-[14px] font-normal mb-5">Global content-logging policy</h3>
             <div className="space-y-3">
               <div className="flex items-center justify-between rounded-xl border border-gray-1 p-3.5 hover:border-ink/20 transition">
@@ -126,7 +126,7 @@ export default async function SettingsPage() {
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white shadow-soft-2 p-6 fade-in-3">
+          <div className="rounded-3xl bg-card shadow-soft-2 p-6 fade-in-3">
             <h3 className="text-[14px] font-normal mb-5">Timeout policy</h3>
             <div className="space-y-3">
               <FieldRow label="Queue-wait timeout" value={timeoutConfig ? (timeoutConfig.queueTimeoutMs / 60000).toString() : "—"} unit="min" hint="After this, request fails with queue_timeout." />
@@ -137,7 +137,7 @@ export default async function SettingsPage() {
           </div>
         </div>
 
-        <div className="rounded-3xl bg-white shadow-soft-2 p-6 fade-in-4">
+        <div className="rounded-3xl bg-card shadow-soft-2 p-6 fade-in-4">
           <div className="flex items-baseline justify-between mb-5">
             <h3 className="text-[14px] font-normal">Access & identity</h3>
             <span className="text-[11px] text-gray-2">no platform-issued credentials · Entra is the only IdP</span>
