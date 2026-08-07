@@ -1,6 +1,6 @@
 import { Client } from "pg";
 import { seed } from "../src/db/seed.js";
-import { closePool } from "../src/db/pool.js";
+import { closePool, getPool } from "../src/db/pool.js";
 
 /**
  * Provisions a dedicated test database before the suite runs.
@@ -54,5 +54,12 @@ export async function setup() {
   // SIM_MODE may not be visible here. The target database is this file's own
   // throwaway test database, so the guard has nothing to protect.
   await seed({ force: true });
+
+  // Replicas are created by the reconciler at runtime and by individual tests
+  // under test; nothing should inherit them from a previous run. Clearing them
+  // here keeps every run identical to a fresh checkout — which is exactly the
+  // difference that let a suite pass locally and fail in CI.
+  await getPool().query(`DELETE FROM replicas`);
+
   await closePool();
 }

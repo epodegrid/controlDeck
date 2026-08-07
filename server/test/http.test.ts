@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/http/app.js";
 import { FakeKedaClient } from "../src/adapters/keda.js";
+import { getPool } from "../src/db/pool.js";
 
 process.env.USE_FAKE_ADAPTERS = "true";
 
@@ -9,7 +10,28 @@ let app: FastifyInstance;
 let token: string;
 const kedaClient = new FakeKedaClient();
 
+/**
+ * Replicas are owned by the reconciler at runtime, which does not run under
+ * test — so these end-to-end cases have to create the capacity they need.
+ * Relying on the seed for them was the bug: the seed stopped creating replicas
+ * when the reconciler took over, and this suite only kept passing on rows a
+ * previous run had left behind.
+ */
+async function insertReplicasForSeededModels() {
+  const pool = getPool();
+  const { rows } = await pool.query<{ id: string }>(`SELECT id FROM model_registry ORDER BY id`);
+  for (const model of rows) {
+    await pool.query(
+      `INSERT INTO replicas (id, model_id, status, in_flight, load_pct, endpoint_url, max_concurrency)
+       VALUES ($1, $2, 'ready', 0, 0, 'http://test.invalid', 4)
+       ON CONFLICT (id) DO UPDATE SET status = 'ready', in_flight = 0`,
+      [`${model.id}-httptest`, model.id]
+    );
+  }
+}
+
 beforeAll(async () => {
+  await insertReplicasForSeededModels();
   app = await buildApp({ kedaClient, logger: false });
   await app.ready();
   const tokenRes = await app.inject({ method: "POST", url: "/dev/token", payload: { oid: "http-test-oid", name: "HTTP Test", team: "engineering" } });
@@ -18,6 +40,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
+  await getPool().query(`DELETE FROM replicas WHERE id LIKE '%-httptest'`);
 });
 
 describe("HTTP API", () => {
