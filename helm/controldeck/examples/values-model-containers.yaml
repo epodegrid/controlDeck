@@ -1,112 +1,298 @@
-# controlDeck for the epodegrid/model-containers fleet.
+# controlDeck — complete production values for the epodegrid/model-containers
+# fleet, on AKS, air-gapped.
+#
+# Deployment-ready as written. Everything you must change for your environment
+# is marked CHANGE ME; everything else is a decision already made, with the
+# reasoning next to it.
+#
+#   kubectl create namespace controldeck
+#
+#   kubectl create secret generic controldeck-db \
+#     --namespace controldeck --from-literal=password="$(openssl rand -base64 24)"
+#
+#   kubectl create secret docker-registry internal-registry \
+#     --namespace controldeck \
+#     --docker-server=<registry> --docker-username=<user> --docker-password=<pw>
 #
 #   helm install controldeck ./helm/controldeck \
-#     -f helm/controldeck/examples/values-model-containers.yaml \
-#     --set postgresql.auth.password=... \
-#     --set router.env.ENTRA_JWKS_URI=... \
-#     --set router.env.ENTRA_ISSUER=... \
-#     --set router.env.ENTRA_AUDIENCE=api://llm-gateway
+#     --namespace controldeck \
+#     -f helm/controldeck/examples/values-model-containers.yaml
 #
 # Every model name, port and timeout below is taken from that repo's own
-# config.yaml files and Dockerfiles, not guessed. Check them against the images
-# you actually deploy — see "Verifying" at the bottom.
+# config.yaml files and Dockerfiles, not guessed. See "Verifying" at the end.
+
+# ===========================================================================
+# Images and registry
+# ===========================================================================
 #
-# ---------------------------------------------------------------------------
-# What the images are
-# ---------------------------------------------------------------------------
+# CHANGE ME — the Secret holding credentials for your internal registry.
+# Applied to every pod this chart creates.
+imagePullSecrets:
+  - name: internal-registry
+
+# ===========================================================================
+# Router — the API tier
+# ===========================================================================
+router:
+  image:
+    # CHANGE ME — mirror ghcr.io/epodegrid/controldeck-* into your registry.
+    repository: ghcr.io/epodegrid/controldeck-router
+    # Empty follows the chart's appVersion. Pin a digest for a reproducible
+    # air-gapped install: repository@sha256:... with tag left empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  # Two, so a node drain or a rolling upgrade does not take the API down. All
+  # shared state is in Postgres, so replicas coordinate rather than duplicate
+  # (PRD §8) — there is no leader and no sticky session to preserve.
+  replicaCount: 2
+  port: 4000
+  resources:
+    # The router streams bytes and writes rows; it does no inference. These are
+    # generous for that job and deliberately not tight, because the one thing
+    # that must never be the bottleneck is the thing every request passes
+    # through.
+    requests: { cpu: 500m, memory: 512Mi }
+    limits: { cpu: "2", memory: 1Gi }
+  env:
+    # --- Entra ID (all four CHANGE ME) -----------------------------------
+    ENTRA_TENANT_ID: "00000000-0000-0000-0000-000000000000"
+    ENTRA_JWKS_URI: "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/discovery/v2.0/keys"
+    ENTRA_ISSUER: "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+    # The API's Application ID URI. Callers must request a token for this
+    # audience; a token minted for Graph or for the client id alone is
+    # rejected. See docs/entra-setup.md.
+    ENTRA_AUDIENCE: "api://llm-gateway"
+    # Entra has no `team` claim. Surface one as an optional claim on the app
+    # registration — `department` is the usual choice — and name it here. It
+    # drives per-team cost breakdown (§6.7) and per-team content-logging
+    # scopes (§6.8); without it both fall back to "unassigned".
+    TEAM_CLAIM: "department"
+
+    # --- Timeouts (§6.5) --------------------------------------------------
+    # Two clocks, deliberately separate. This one is inactivity *during*
+    # generation: a stream that has stopped producing tokens for 60s is dead.
+    # It never caps total duration, so a slow 35B answer runs to completion.
+    STALL_TIMEOUT_MS: "60000"
+    # How long a request waits for a free replica before failing. Five minutes
+    # is roughly one cold model load plus a queue — beyond that the caller is
+    # better served by an error than by a connection held open.
+    QUEUE_TIMEOUT_MS: "300000"
+    # Fallback for models that do not set firstTokenTimeoutMs. Every model
+    # below sets its own; this only catches a model added without one.
+    FIRST_TOKEN_TIMEOUT_MS: "900000"
+
+    # --- Logs (§6.10, §6.8) ----------------------------------------------
+    # In-cluster this is detected automatically; set explicitly so a change to
+    # the service-account mount cannot silently switch it off.
+    LOG_SOURCE: "kubernetes"
+    # llama.cpp prints prompts at higher verbosity. Without this the log panel
+    # becomes a way to read prompt content that bypasses the content-logging
+    # scopes entirely. Leave it on unless you have decided otherwise
+    # deliberately.
+    LOG_REDACT_PROMPTS: "true"
+
+    # --- Placement --------------------------------------------------------
+    # How long an observed tokens/sec reading is trusted before a replica is
+    # re-explored. Load-bearing: without expiry a replica that has one slow
+    # period stops receiving traffic and can never earn its score back.
+    THROUGHPUT_FRESH_MS: "120000"
+    # Weight of the newest sample in the running average. 0.3 settles in about
+    # ten requests while still tracking a replica that genuinely slows down.
+    TOKENS_PER_SEC_ALPHA: "0.3"
+
+    # Never true here. It disables real model calls entirely.
+    USE_FAKE_ADAPTERS: "false"
+
+# ===========================================================================
+# Dashboard
+# ===========================================================================
+dashboard:
+  image:
+    repository: ghcr.io/epodegrid/controldeck-dashboard # CHANGE ME (mirror)
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  port: 3000
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 1Gi }
+  env:
+    # Empty is correct with the same-origin ingress below: the browser reaches
+    # the router at /v1 on the same host. Set it only if the API is served
+    # from a different origin — the log stream calls it from the browser.
+    NEXT_PUBLIC_API_BASE_URL: ""
+    # CHANGE ME — the dashboard's own app registration (separate from the
+    # API's, since it runs an auth-code + PKCE sign-in rather than validating
+    # tokens).
+    DASHBOARD_ENTRA_CLIENT_ID: "00000000-0000-0000-0000-000000000000"
+    DASHBOARD_ENTRA_TENANT_ID: "00000000-0000-0000-0000-000000000000"
+    # Prefer an app role over a group id. Users in more than ~200 groups hit
+    # Entra's group-claim overage, where the claim is replaced by a Graph
+    # pointer and group-based admin checks silently fail for exactly the
+    # senior staff most likely to be admins. See docs/entra-setup.md.
+    DASHBOARD_ADMIN_GROUP_ID: ""
+
+# ===========================================================================
+# Ingress
+# ===========================================================================
 #
-#   eve:zen4 / eve:zen5      llama-swap → ik_llama.cpp llama-server, port 8080
-#                            serves the model named `ornith`
-#   wall-e:zen4 / :zen5      same shape, serves the model named `wall-e`
-#   go-4:latest              FastAPI (not llama-swap), port 8000, embeddings
+# Same host for both, so the browser calls the API same-origin and no CORS
+# configuration is needed. /v1 must be matched before /, which Prefix
+# path-matching on a longer path does by specificity.
+ingress:
+  enabled: true
+  className: nginx # CHANGE ME if your cluster uses a different controller
+  annotations:
+    # Streaming: responses are SSE and can run for many minutes. A proxy that
+    # buffers them defeats streaming entirely, and one that times out at the
+    # default 60s cuts off long generations mid-answer.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # A prompt with a few images is not small.
+    nginx.ingress.kubernetes.io/proxy-body-size: "32m"
+  hosts:
+    - host: controldeck.internal.example # CHANGE ME
+      paths:
+        - path: /v1
+          pathType: Prefix
+          service: router
+        - path: /
+          pathType: Prefix
+          service: dashboard
+
+# ===========================================================================
+# Postgres
+# ===========================================================================
+#
+# All shared router state, plus audit and cost history. Deployed by this chart
+# from the official image — no third-party subchart, and so no external chart
+# repository in the deployment path, which an air-gapped cluster cannot reach.
+postgresql:
+  enabled: true
+  image: postgres:16-alpine # CHANGE ME (mirror)
+  auth:
+    username: controldeck
+    database: controldeck
+    # The Secret created in the header above. With this set the chart renders
+    # no password of its own — nothing sensitive lands in the release manifest
+    # stored in the cluster.
+    existingSecret: controldeck-db
+    existingSecretPasswordKey: password
+  persistence:
+    enabled: true
+    # Audit rows are small but numerous, and content logging stores full
+    # prompts and responses for whichever scopes you enable. 100Gi is roughly
+    # a year of steady traffic with content logging on for a few teams; watch
+    # it and grow before it fills.
+    size: 100Gi
+    # CHANGE ME — on AKS, managed-csi-premium is SSD-backed. The default class
+    # is rarely the one you want under a database.
+    storageClass: managed-csi-premium
+  resources:
+    requests: { cpu: 500m, memory: 1Gi }
+    limits: { cpu: "2", memory: 4Gi }
+
+# Not this fleet: weights are baked into the images as layers, so nothing is
+# fetched at run time and this init container never runs. Left here only so
+# the value is not mistaken for missing.
+weightsFetcher:
+  image: curlimages/curl:8.10.1
+
+# Prometheus/Grafana scrape target, served by the router process itself.
+metricsApi:
+  enabled: true
+  port: 9090
+
+# Real models, never the mock fleet.
+mockModels:
+  enabled: false
+
+# ===========================================================================
+# Models
+# ===========================================================================
+#
+# What the images are:
+#
+#   eve:zen4 / eve:zen5    llama-swap → ik_llama.cpp llama-server, port 8080
+#                          serves the model named `ornith`
+#   wall-e:zen4 / :zen5    same shape, serves the model named `wall-e`
+#   go-4:latest            FastAPI (not llama-swap), port 8000, embeddings
 #
 # The image name is not the model name. The `eve` image serves a model called
 # `ornith` — that is what goes in `upstreamModel`, because llama-swap picks
 # which process to proxy to entirely from the request's `model` field.
 #
 # zen4 and zen5 are separate builds of llama-server for different AMD
-# micro-architectures. Running a zen5 build on a zen4 node dies with an illegal
-# instruction at start-up, so pin each with nodeSelector to a matching pool.
-#
-# ---------------------------------------------------------------------------
-# Air-gapped notes
-# ---------------------------------------------------------------------------
-#
-#   * Weights are baked into the images as layers, so nothing is fetched at
-#     run time. `weightsUrl` is deliberately unset — leave it that way.
-#   * Set imagePullSecrets below and mirror ghcr.io/epodegrid/* plus the
-#     controlDeck images into the internal registry, adjusting the repository
-#     paths to match.
-#   * The chart pulls no external Helm repositories: Postgres is a StatefulSet
-#     on the official image, not a subchart.
-#   * The images are large (a 35B Q4_K_M is tens of GB across several layers).
-#     Pre-pull them onto the node pools, or the first scale-up waits on the
-#     pull as well as on the model load.
-
-imagePullSecrets: []
-#  - name: internal-registry
-
-mockModels:
-  enabled: false
-
-router:
-  env:
-    # Both clocks matter for this fleet. The stall timeout only applies once
-    # tokens are flowing; the wait for weights is per-model, below.
-    STALL_TIMEOUT_MS: "60000"
-    QUEUE_TIMEOUT_MS: "300000"
-
+# micro-architectures. A zen5 build on a zen4 node dies with an illegal
+# instruction at start-up, so each is pinned with nodeSelector.
 models:
-  # ---------------------------------------------------------------------
+  # -------------------------------------------------------------------------
   # Ornith-1.0 35B — the `eve` image
-  # ---------------------------------------------------------------------
+  # -------------------------------------------------------------------------
   - id: ornith
     name: "Ornith-1.0 35B"
+    classLabel: "Large / complex"
     modelClass: large
     # No --mmproj in the image's llama-server command, so it is text-only
-    # despite the base model's capabilities. Advertising vision here would
-    # route image requests to a model that cannot serve them.
+    # despite the base model. Advertising vision here would route image
+    # requests to a model that cannot serve them.
     capabilities: [chat, tools]
     upstreamModel: ornith
     port: 8080
-    # The image's config.yaml sets healthCheckTimeout: 1800 for a reason: a
-    # 35B Q4_K_M spread over five shards takes minutes to load, and llama-swap
-    # loads it on the first request that names it. Match that here, or the
-    # request that triggers the load is failed while the load is still working.
+    # The image sets healthCheckTimeout: 1800 for a reason: a 35B Q4_K_M across
+    # five shards takes minutes to load, and llama-swap loads it on the first
+    # request naming it. Match that, or the request that triggers the load is
+    # failed while the load is still working — on every scale-up.
     firstTokenTimeoutMs: 1800000
+    # One always resident. A cold start costs minutes, so the first caller of
+    # the day should not pay it.
     minReplicas: 1
     maxReplicas: 4
     costBasis: per_1k_tokens
     costValue: 0.0042
+    # Empty: the model's own chat template governs. A default here would apply
+    # to every caller who does not set their own (§6.11).
     systemPrompt: ""
     nodeSelector:
-      # Must match the image tag. Replace with your pool's actual labels.
-      kubernetes.io/arch: amd64
-      controldeck.io/cpu-arch: zen4
+      # CHANGE ME — must match the image tag's micro-architecture and your
+      # pool's actual labels.
+      kubernetes.io/os: linux
+      agentpool: llmzen4
+    tolerations:
+      # CHANGE ME — if the model pool is tainted to keep general workloads off.
+      - key: workload
+        operator: Equal
+        value: llm
+        effect: NoSchedule
     keda:
-      # llama-server runs with --parallel 1, so a replica serves exactly one
-      # request at a time. Any higher number here provisions less capacity
-      # than the fleet actually needs.
+      # llama-server runs with --parallel 1: a replica serves exactly one
+      # request at a time. Anything higher here provisions less capacity than
+      # the fleet actually needs.
       requestsPerReplica: 1
       pollingIntervalSeconds: 15
       cooldownSeconds: 600
+      # One at a time. The metric asks for demand+1 immediately; this governs
+      # how fast that is granted. Starting four 35B replicas at once thrashes
+      # the cluster autoscaler for nodes that arrive too late to help the burst
+      # that asked for them.
       scaleUpPods: 1
       scaleUpPeriodSeconds: 60
       scaleDownPods: 1
       scaleDownPeriodSeconds: 120
-      # Long: evicting a replica discards a loaded 35B model, and the next
-      # request pays the full multi-minute load again.
+      # Long. Evicting a replica discards a loaded 35B model and the next
+      # request pays the full load again; an idle one costs only memory.
       scaleDownStabilizationSeconds: 900
     # A generation in flight when a scale-down lands must be allowed to finish.
     drainSeconds: 600
     llamaSwap:
-      image: ghcr.io/epodegrid/eve:zen4
-      # No modelPath: the image ships its own config.yaml with the weights
-      # baked in and the paths already correct.
+      image: ghcr.io/epodegrid/eve:zen4 # CHANGE ME (arch + mirror)
+      # No modelPath: the image ships its own config.yaml with weights baked in
+      # and the paths already correct.
       resources:
-        # Sizing guide, not a recommendation — measure yours. The weights are
-        # roughly 21Gi, and --ctx-size 262144 makes the KV cache the larger
-        # term. Start generous and tighten with observed usage.
+        # CHANGE ME after measuring. Weights are ~21Gi and --ctx-size 262144
+        # makes the KV cache the larger term — this is a starting point, not a
+        # recommendation. An OOMKill mid-generation looks like a stall.
         requests: { cpu: "8", memory: 64Gi }
         limits: { cpu: "16", memory: 96Gi }
 
@@ -116,11 +302,12 @@ models:
   # reading their combined queue.
   #
   # `ornith:thinking-coding` is a setParamsByID filter in the image's config,
-  # which raises presence_penalty and fixes temperature for coding work. With
+  # raising presence_penalty and fixing temperature for coding work. With
   # includeAliasesInList: true it appears in /v1/models like any other name, so
   # the router's verification recognises it.
   - id: ornith-thinking
     name: "Ornith-1.0 35B (thinking)"
+    classLabel: "Large / reasoning"
     modelClass: large
     capabilities: [chat, tools]
     backendRef: ornith
@@ -129,24 +316,32 @@ models:
     costValue: 0.0042
     systemPrompt: ""
 
-  # ---------------------------------------------------------------------
+  # -------------------------------------------------------------------------
   # Gemma 4 12B — the `wall-e` image
-  # ---------------------------------------------------------------------
+  # -------------------------------------------------------------------------
   - id: wall-e
     name: "Gemma 4 12B"
+    classLabel: "Fast / general"
     modelClass: fast
     capabilities: [chat, tools]
     upstreamModel: wall-e
     port: 8080
     firstTokenTimeoutMs: 900000
-    minReplicas: 1
+    # Two resident: this is the model most traffic lands on, and it is cheap
+    # enough to keep a spare warm.
+    minReplicas: 2
     maxReplicas: 6
     costBasis: per_1k_tokens
     costValue: 0.0011
     systemPrompt: ""
     nodeSelector:
-      kubernetes.io/arch: amd64
-      controldeck.io/cpu-arch: zen4
+      kubernetes.io/os: linux
+      agentpool: llmzen4 # CHANGE ME
+    tolerations:
+      - key: workload
+        operator: Equal
+        value: llm
+        effect: NoSchedule
     keda:
       requestsPerReplica: 1 # --parallel 1 here too
       pollingIntervalSeconds: 15
@@ -158,42 +353,47 @@ models:
       scaleDownStabilizationSeconds: 600
     drainSeconds: 300
     llamaSwap:
-      image: ghcr.io/epodegrid/wall-e:zen4
+      image: ghcr.io/epodegrid/wall-e:zen4 # CHANGE ME (arch + mirror)
       resources:
         # ~8Gi of weights, --ctx-size 131072.
         requests: { cpu: "4", memory: 24Gi }
         limits: { cpu: "8", memory: 40Gi }
 
-  # ---------------------------------------------------------------------
+  # -------------------------------------------------------------------------
   # Embeddings — the `go-4` image
-  # ---------------------------------------------------------------------
+  # -------------------------------------------------------------------------
   #
   # Not llama-swap: a FastAPI service exposing only /health and /v1/embeddings,
   # on port 8000. Two things follow.
   #
-  # It has no /v1/models, so the router reports this model's upstream name as
-  # "unverifiable" rather than "ok" on the Models page. That is expected here
-  # and is not a fault — the service ignores the `model` field and serves its
-  # one pair of models regardless.
+  # It has no /v1/models, so the Models page reports this model's upstream name
+  # as "unverifiable" rather than "ok". Expected here, not a fault — the
+  # service ignores the `model` field and serves its one pair of models
+  # regardless.
   #
-  # It also loads both models at import time and only then binds the port, so
+  # It also loads both models at import and only then binds the port, so
   # readiness genuinely gates on the model being ready — unlike llama-swap.
   - id: go-4
     name: "Nomic Embed (text + vision)"
+    classLabel: "Embedding"
     modelClass: embedding
     capabilities: [embeddings]
     upstreamModel: nomic-embed-vision-v1.5
     port: 8000
-    # Short: readiness already covers the load, so a request that waits this
-    # long is genuinely stuck rather than starting up.
+    # Short: readiness already covers the load, so a request waiting this long
+    # is genuinely stuck rather than starting up.
     firstTokenTimeoutMs: 120000
     minReplicas: 1
     maxReplicas: 3
+    # Embedding work is bounded by compute time rather than tokens generated,
+    # so it is billed by the second (§6.7).
     costBasis: per_compute_second
     costValue: 0.0003
     systemPrompt: ""
+    nodeSelector:
+      kubernetes.io/os: linux
     keda:
-      # No --parallel constraint; a batch of embeddings is short work.
+      # No --parallel constraint, and a batch of embeddings is short work.
       requestsPerReplica: 4
       pollingIntervalSeconds: 15
       cooldownSeconds: 300
@@ -204,14 +404,33 @@ models:
       scaleDownStabilizationSeconds: 300
     drainSeconds: 60
     llamaSwap:
-      image: ghcr.io/epodegrid/go-4:latest
+      image: ghcr.io/epodegrid/go-4:latest # CHANGE ME (mirror)
       resources:
         requests: { cpu: "2", memory: 8Gi }
         limits: { cpu: "4", memory: 12Gi }
 
-# ---------------------------------------------------------------------------
-# Verifying
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Before you deploy
+# ===========================================================================
+#
+# 1. KEDA must already be installed in the cluster. This chart creates
+#    ScaledObjects; it does not install the operator.
+#
+#      helm install keda kedacore/keda --namespace keda --create-namespace
+#
+#    Air-gapped: mirror the KEDA images and pull the chart in beforehand.
+#
+# 2. Pre-pull the model images onto their node pools. A 35B image is tens of
+#    GB across several layers; the first scale-up otherwise waits on the pull
+#    as well as on the model load.
+#
+# 3. If your cluster's CA is not in the public trust store, the router needs
+#    it to reach the Kubernetes API for pod discovery and pod logs. Mount it
+#    and set NODE_EXTRA_CA_CERTS under router.env.
+#
+# ===========================================================================
+# Verifying the model names
+# ===========================================================================
 #
 # The names a container answers to live in its own config.yaml, so an image
 # rebuild can rename one while the deployment stays green and every request to
@@ -219,7 +438,7 @@ models:
 # /v1/models on every reconcile and flags a mismatch on the Models page, naming
 # what the container does serve. To check by hand:
 #
-#   kubectl exec -n <ns> deploy/ornith-replica -- \
+#   kubectl exec -n controldeck deploy/ornith-replica -- \
 #     wget -qO- localhost:8080/v1/models
 #
 # At the time of writing that returns, for the eve image:

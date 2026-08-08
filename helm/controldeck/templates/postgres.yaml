@@ -21,7 +21,9 @@ type: Opaque
 stringData:
   POSTGRES_USER: {{ .Values.postgresql.auth.username | quote }}
   POSTGRES_DB: {{ .Values.postgresql.auth.database | quote }}
+{{- if not .Values.postgresql.auth.existingSecret }}
   POSTGRES_PASSWORD: {{ .Values.postgresql.auth.password | default "controldeck" | quote }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -68,6 +70,13 @@ spec:
             # point, and a PVC arrives with lost+found already in it.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            {{- with .Values.postgresql.auth.existingSecret }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.postgresql.auth.existingSecretPasswordKey | default "password" }}
+            {{- end }}
           ports:
             - containerPort: 5432
           readinessProbe:
@@ -91,6 +100,11 @@ spec:
         name: data
       spec:
         accessModes: ["ReadWriteOnce"]
+        {{- with .Values.postgresql.persistence.storageClass }}
+        # Cluster-specific. Left unset the cluster's default class is used,
+        # which on a managed cluster is rarely the one you want for a database.
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.postgresql.persistence.size }}

@@ -220,12 +220,20 @@ spec:
     name: {{ .id }}-replica
   minReplicaCount: {{ .minReplicas }}
   maxReplicaCount: {{ .maxReplicas }}
-  # How often KEDA asks the router for the current figure.
+  {{- if eq (int .minReplicas) 0 }}
+  # Both of these apply only to the scale-to-zero path, and KEDA warns on every
+  # apply if they are set when minReplicaCount > 0. Emitted only when they mean
+  # something, so `kubectl apply` stays quiet and the manifest says what is
+  # actually in effect. Above zero, the HPA polls the external metric on its own
+  # schedule and scale-down is governed by the behavior policies below.
+  #
+  # pollingInterval: how often KEDA asks the router for the current figure.
   pollingInterval: {{ .keda.pollingIntervalSeconds | default 15 }}
-  # How long a replica must stay unneeded before it is removed. Generous by
-  # default: reloading model weights is expensive, so trading a little idle
-  # RAM for not paying that cost repeatedly is the right way round (§6.4).
+  # cooldownPeriod: how long the last replica must stay unneeded before it is
+  # removed. Generous, because reloading model weights is expensive and trading
+  # idle RAM for not paying that cost repeatedly is the right way round (§6.4).
   cooldownPeriod: {{ .keda.cooldownSeconds | default 300 }}
+  {{- end }}
   triggers:
     - type: metrics-api
       metadata:

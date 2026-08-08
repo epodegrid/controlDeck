@@ -32,11 +32,24 @@ spec:
           env:
             - name: PORT
               value: "{{ .Values.router.port }}"
+            {{- if .Values.postgresql.auth.existingSecret }}
+            # Assembled here rather than stored, so the password exists only in
+            # the Secret you manage. Kubernetes expands $(VAR) against earlier
+            # entries in this same list.
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.auth.existingSecret }}
+                  key: {{ .Values.postgresql.auth.existingSecretPasswordKey | default "password" }}
+            - name: DATABASE_URL
+              value: "postgres://{{ .Values.postgresql.auth.username }}:$(PGPASSWORD)@{{ .Values.postgresql.host | default (printf "%s-postgres" (include "controldeck.fullname" .)) }}:5432/{{ .Values.postgresql.auth.database }}"
+            {{- else }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "controldeck.fullname" . }}-db
                   key: url
+            {{- end }}
             {{- range $k, $v := .Values.router.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

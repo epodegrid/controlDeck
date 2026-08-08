@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 Found while matching the example values to the real `epodegrid/model-containers`
 images, and verified against a live llama-swap.
@@ -22,10 +22,32 @@ images, and verified against a live llama-swap.
   recorded as content. A real 25-second cold load went from 105 raw frames to
   8 clean ones with no leakage.
 
+- **`ingress.enabled` did nothing.** The value was documented and read by
+  nobody — there was no Ingress template — so a chart configured for external
+  access silently produced none. Now rendered, with per-path selection between
+  the router and the dashboard so both can share one host and the browser can
+  call the API same-origin.
+- **KEDA warned on every apply.** `pollingInterval` and `cooldownPeriod` apply
+  only to the scale-to-zero path; they are now emitted only when a model
+  actually scales to zero, so the manifest states what is in effect.
+
 ### Added
 
 - **`imagePullSecrets`**, applied to every pod the chart creates. An air-gapped
   install pulls from an internal mirror, which normally needs credentials.
+- **`postgresql.auth.existingSecret`.** A password in values is rendered into
+  the release manifest stored in the cluster; with this set the chart renders
+  no password at all and the router assembles its connection string at run
+  time from the Secret you manage.
+- **`postgresql.persistence.storageClass`** and **`postgresql.host`** — the
+  cluster default class is rarely what you want under a database, and an
+  external managed Postgres needs an address.
+- **`ingress.tls`**, passed through as given.
+- **A complete, deployment-ready example** in
+  `examples/values-model-containers.yaml`: router, dashboard, Postgres,
+  ingress, and the whole model fleet, with every environment-specific value
+  marked. Verified with `kubectl apply --dry-run=server` against a live API
+  server with the KEDA CRDs present.
 
 ## 0.3.0
 

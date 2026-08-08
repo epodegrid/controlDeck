@@ -87,6 +87,12 @@ ingress:
   enabled: false
   className: ""
   annotations: {}
+  # Standard Ingress TLS block, passed through as given:
+  #   - hosts: [controldeck.internal.example]
+  #     secretName: controldeck-tls
+  tls: []
+  # `service` selects which backend a path routes to, so the dashboard and the
+  # API can share one host and the browser can call the API same-origin.
   hosts:
     - host: controldeck.example.internal
       paths:
@@ -105,11 +111,22 @@ postgresql:
   auth:
     username: controldeck
     database: controldeck
-    # Override in any real deployment, ideally from an existing Secret.
+    # Used only when existingSecret is empty. Anything set here is rendered
+    # into the release manifest stored in the cluster, so prefer the Secret.
     password: controldeck
+    # A Secret you create and manage. When set, the chart renders no password
+    # of its own and the router assembles its connection string at run time.
+    existingSecret: ""
+    existingSecretPasswordKey: password
+  # Point at an external Postgres (e.g. Azure Database for PostgreSQL) together
+  # with postgresql.enabled=false. Defaults to the in-chart StatefulSet.
+  host: ""
   persistence:
     enabled: true
     size: 20Gi
+    # Unset uses the cluster default, which on a managed cluster is rarely the
+    # class you want for a database.
+    storageClass: ""
   resources:
     requests: { cpu: 250m, memory: 256Mi }
     limits: { cpu: "2", memory: 1Gi }

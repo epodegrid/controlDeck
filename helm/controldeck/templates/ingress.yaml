@@ -1,0 +1,52 @@
+{{- if .Values.ingress.enabled }}
+# External entry point for the dashboard and the API.
+#
+# `service: router | dashboard` on each path selects the backend, because the
+# two are normally served from one host: the browser then calls the API
+# same-origin and no CORS configuration is involved. The log stream and
+# streaming chat completions are both called from the browser, and a
+# cross-origin setup makes those the first things to break.
+#
+# Ordering note: paths are emitted in the order given. Ingress controllers
+# match the most specific path, so /v1 wins over / regardless, but keeping the
+# longer path first makes the intent readable in `kubectl describe`.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "controldeck.fullname" . }}
+  labels:
+    {{- include "controldeck.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                {{- if eq (.service | default "dashboard") "router" }}
+                name: {{ include "controldeck.fullname" $ }}-router
+                port:
+                  number: {{ $.Values.router.port }}
+                {{- else }}
+                name: {{ include "controldeck.fullname" $ }}-dashboard
+                port:
+                  number: {{ $.Values.dashboard.port }}
+                {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}
