@@ -177,6 +177,8 @@ All shared state lives in Postgres, which is what lets the router run multiple r
 | `LOG_SOURCE` | auto | `kubernetes`, `endpoint`, or `none`. Auto-detects in-cluster |
 | `LOG_REDACT_PROMPTS` | `true` | Mask prompt/completion text in the log stream |
 | `THROUGHPUT_FRESH_MS` | `120000` | How long a replica's measured tokens/sec is trusted |
+| `AFFINITY_ENABLED` | `true` | Route later turns back to the replica holding the KV cache |
+| `AFFINITY_TTL_MS` | `1800000` | How long an unused conversation affinity is kept |
 | `TOKENS_PER_SEC_ALPHA` | `0.3` | Weight of the newest throughput sample |
 | `QUEUE_TIMEOUT_MS` | `300000` | Queue-wait clock (§6.5) |
 | `STALL_TIMEOUT_MS` | `60000` | Inactivity clock — time since the last token |
@@ -418,6 +420,29 @@ content logging *off* for a team would still read their prompts here. Lines
 carrying prompt or completion text are replaced with a visible marker;
 operational lines are untouched. Set `LOG_REDACT_PROMPTS=false` to disable,
 deliberately.
+
+**Prefix-cache affinity.** Model servers reuse the KV cache of whatever prompt
+prefix a request shares with a slot — `selected slot by LCP similarity` in
+llama.cpp's own logs. Within a pod the server picks the best slot itself;
+across pods the router decides, and sending turn two of a conversation
+somewhere else throws that cache away. On a long conversation that means
+reprocessing tens of thousands of prompt tokens before generating a single new
+one.
+
+Later turns are therefore routed back to the replica already holding the
+conversation. The key is a hash of the caller plus the conversation's *opening*
+messages — the part that stays constant as it grows, and the part the cache
+actually holds. Deliberately not the bearer token: Entra rotates it roughly
+hourly, which would break affinity mid-conversation, and one caller may run
+several unrelated conversations.
+
+It is a preference, never a pin. The affine replica is only chosen if it still
+has headroom, so §6.4's least-loaded placement continues to govern and a busy
+conversation cannot monopolise a replica. When it is saturated or has been
+scaled away, placement falls back and the conversation pays the prompt-eval it
+would have paid anyway — a cold cache is cheaper than waiting. `requests.affinity_hit`
+records the outcome, so the benefit is measurable rather than assumed. Disable
+with `AFFINITY_ENABLED=false`.
 
 **Throughput-aware placement.** Every completed request contributes its
 observed tokens/sec to a moving average per replica. Placement keeps

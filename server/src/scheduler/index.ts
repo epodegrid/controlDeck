@@ -14,5 +14,14 @@ export {
 } from "./queue.js";
 export type { EnqueueRequestInput, CompleteRequestInput } from "./queue.js";
 
+export {
+  affinityKeyFor,
+  lookupAffinity,
+  recordAffinity,
+  sweepAffinities,
+  affinityEnabled,
+  AFFINITY_TTL_MS,
+} from "./affinity.js";
+
 export type { KedaClient } from "../adapters/keda.js";
 export { FakeKedaClient, NoopKedaClient } from "../adapters/keda.js";

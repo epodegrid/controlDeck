@@ -1,6 +1,6 @@
 import { buildApp } from "./http/app.js";
 import { config } from "./config.js";
-import { sweepQueueTimeouts, sweepStallTimeouts } from "./scheduler/index.js";
+import { sweepQueueTimeouts, sweepStallTimeouts, sweepAffinities } from "./scheduler/index.js";
 import { reconcileReplicas } from "./replicas/reconcile.js";
 import { runMigrations } from "./db/migrate.js";
 import { probeJwks } from "./auth/index.js";
@@ -41,6 +41,12 @@ async function main() {
   setInterval(() => {
     sweepStallTimeouts().catch((err) => app.log.error(err, "stall timeout sweep failed"));
   }, SWEEP_INTERVAL_MS);
+
+  // Drops expired cache affinities and any pointing at a replica that has gone
+  // away — a scaled-down pod took its KV cache with it.
+  setInterval(() => {
+    sweepAffinities().catch((err) => app.log.error(err, "affinity sweep failed"));
+  }, 60_000);
 
   // Replica discovery + readiness probing. Runs once up front so the router
   // has a real view of its fleet before it accepts the first request, rather

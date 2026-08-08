@@ -19,6 +19,7 @@ import type { LlamaSwapClient } from "../../adapters/llama-swap.js";
 import { statusForError, replicaUnavailable, queueTimeoutError } from "../errors.js";
 import type { ChatCompletionRequest, StandardError } from "../../types.js";
 import { createAuthPreHandler } from "../auth-middleware.js";
+import { affinityKeyFor } from "../../scheduler/affinity.js";
 import { writeSseHead } from "../sse.js";
 import type { JWKSSource } from "../../auth/index.js";
 
@@ -39,12 +40,23 @@ async function failRequest(requestId: string, err: StandardError, replicaId: str
 async function waitForPlacement(
   modelId: string,
   requestId: string,
-  kedaClient: KedaClient
-): Promise<{ ok: true; replicaId: string; endpointUrl: string } | { ok: false; error: StandardError }> {
+  kedaClient: KedaClient,
+  affinityKey?: string
+): Promise<
+  | { ok: true; replicaId: string; endpointUrl: string; affinityHit: boolean }
+  | { ok: false; error: StandardError }
+> {
   const deadline = Date.now() + QUEUE_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const placed = await placeRequest(modelId, { kedaClient });
-    if (placed.ok) return { ok: true, replicaId: placed.replica.id, endpointUrl: placed.replica.endpointUrl };
+    const placed = await placeRequest(modelId, { kedaClient, ...(affinityKey ? { affinityKey } : {}) });
+    if (placed.ok) {
+      return {
+        ok: true,
+        replicaId: placed.replica.id,
+        endpointUrl: placed.replica.endpointUrl,
+        affinityHit: placed.affinityHit,
+      };
+    }
     await new Promise((r) => setTimeout(r, PLACEMENT_RETRY_MS));
   }
   // Fail only this caller's request. The periodic sweep in index.ts handles
@@ -103,13 +115,28 @@ export function registerV1Routes(
     });
     await getPool().query(`UPDATE requests SET routed_model = $2 WHERE id = $1`, [requestId, selection.modelId]);
 
-    const placement = await waitForPlacement(selection.modelId, requestId, deps.kedaClient);
+    // Prefer the replica already holding this conversation's KV cache. Keyed
+    // on the caller plus the opening messages, which stay constant as the
+    // conversation grows — see scheduler/affinity.ts.
+    const affinityKey = affinityKeyFor(identity, selection.modelId, body.messages) ?? undefined;
+
+    const placement = await waitForPlacement(
+      selection.modelId,
+      requestId,
+      deps.kedaClient,
+      affinityKey
+    );
     if (!placement.ok) {
       reply.code(statusForError(placement.error)).send(placement.error);
       return;
     }
 
     await markStreamStarted(requestId, placement.replicaId);
+    // Recorded so the benefit is measurable rather than assumed.
+    await getPool().query(`UPDATE requests SET affinity_hit = $2 WHERE id = $1`, [
+      requestId,
+      placement.affinityHit,
+    ]);
     const model = candidates.find((m) => m.id === selection.modelId)!;
     // The placed replica's own address — falling back to the model-level one
     // only for registries predating per-replica endpoints.

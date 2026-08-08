@@ -2,6 +2,7 @@ import { getPool } from "../db/pool.js";
 import type { Replica, ReplicaStatus } from "../types.js";
 import type { KedaClient } from "../adapters/keda.js";
 import { NoopKedaClient } from "../adapters/keda.js";
+import { affinityEnabled, lookupAffinity, recordAffinity } from "./affinity.js";
 
 /**
  * How long a throughput measurement is trusted. Past this the replica is
@@ -12,10 +13,15 @@ export const THROUGHPUT_FRESH_MS = Number(process.env.THROUGHPUT_FRESH_MS ?? 120
 
 export type PlaceRequestOptions = {
   kedaClient?: KedaClient;
+  /**
+   * Conversation identity, used to prefer the replica already holding this
+   * conversation's KV cache. A preference only — see affinity.ts.
+   */
+  affinityKey?: string;
 };
 
 export type PlaceRequestResult =
-  | { ok: true; replica: Replica }
+  | { ok: true; replica: Replica; affinityHit: boolean }
   | { ok: false; needsQueue: true };
 
 type ReplicaRow = {
@@ -91,8 +97,40 @@ export async function placeRequest(
   modelId: string,
   options: PlaceRequestOptions = {}
 ): Promise<PlaceRequestResult> {
-  const { kedaClient = new NoopKedaClient() } = options;
+  const { kedaClient = new NoopKedaClient(), affinityKey } = options;
   const pool = getPool();
+
+  // Prefix-cache affinity: prefer the replica that already holds this
+  // conversation's cache, but only if it has headroom. Claiming it uses the
+  // same conditional increment as the general path, so a concurrent caller
+  // cannot push it past its ceiling.
+  if (affinityKey && affinityEnabled()) {
+    const target = await lookupAffinity(affinityKey, modelId);
+    if (target) {
+      const { rows: affine } = await pool.query<ReplicaRow>(
+        `UPDATE replicas r
+         SET in_flight = r.in_flight + 1, updated_at = now()
+         FROM (
+           SELECT id, in_flight AS old_in_flight FROM replicas
+           WHERE id = $2 AND model_id = $1 AND status = 'ready' AND in_flight < max_concurrency
+           FOR UPDATE SKIP LOCKED
+         ) s
+         WHERE r.id = s.id
+         RETURNING r.id, r.model_id, r.status, r.in_flight, r.load_pct, r.tokens_per_sec,
+                   r.endpoint_url, s.old_in_flight`,
+        [modelId, target]
+      );
+
+      if (affine.length > 0) {
+        const row = affine[0];
+        if (Number(row.old_in_flight) === 0) await kedaClient.requestScaleUp(modelId);
+        await recordAffinity(affinityKey, modelId, row.id);
+        return { ok: true, replica: toReplica(row), affinityHit: true };
+      }
+      // Busy or gone: fall through. The conversation pays the prompt-eval it
+      // would have paid without affinity at all, rather than waiting.
+    }
+  }
 
   const { rows } = await pool.query<ReplicaRow>(
     `WITH selected AS (
@@ -122,6 +160,11 @@ export async function placeRequest(
   const row = rows[0];
   const replica = toReplica(row);
 
+  // Remember where this conversation landed, so its next turn can come back.
+  if (affinityKey && affinityEnabled()) {
+    await recordAffinity(affinityKey, modelId, replica.id);
+  }
+
   // "The moment any replica of a model receives its first request" — i.e.
   // this replica transitioned from idle (in_flight === 0) to serving. We only
   // fire once per idle->busy transition of a given replica, not on every
@@ -130,5 +173,5 @@ export async function placeRequest(
     await kedaClient.requestScaleUp(modelId);
   }
 
-  return { ok: true, replica };
+  return { ok: true, replica, affinityHit: false };
 }
