@@ -204,6 +204,27 @@ Two things worth knowing up front:
 
 ---
 
+## What has actually been verified
+
+Claims here are only made where they have been executed:
+
+| | How |
+|---|---|
+| Routing, queueing, cost, audit | 116 server tests against a real Postgres |
+| Sign-in, dashboard, logs | 24 Playwright tests in production auth mode |
+| Real inference | `llama.cpp` serving a 135M GGUF in-cluster |
+| Pod discovery, pod logs, RBAC | minikube |
+| KEDA scale up *and* down | minikube, 1 → 4 → 1 |
+| GitOps registration, override survival | minikube, fresh install with no seeding |
+| Entra ID | **not verified** — needs a real tenant; see [docs/entra-setup.md](docs/entra-setup.md) |
+
+The model server used for verification is upstream `llama.cpp`, not
+`ik_llama.cpp`. They share the OpenAI-compatible surface and the `/health`
+readiness contract the router depends on, but the fork itself has not been run
+here.
+
+---
+
 ## Deploying
 
 Images and the chart are published to GHCR on every tagged release:
@@ -344,11 +365,17 @@ Scale-down is deliberately slower than scale-up (5-minute stabilization): an
 idle replica costs little but RAM on this cost model, while reloading weights is
 expensive.
 
-**Not yet verified against a live cluster.** The arithmetic is unit-tested and
-the chart renders and lints, but whether the KEDA operator reads the metric and
-actually creates pods needs a cluster to answer. Run
-[`scripts/verify-keda.sh`](scripts/verify-keda.sh) against minikube to find out;
-treat autoscaling as unproven until you have.
+**Verified on a live cluster.** Against minikube with KEDA and a real
+`llama.cpp` server, the fleet scales 1 → 4 under load and back to 1 when idle,
+one pod at a time in each direction. [`scripts/verify-keda.sh`](scripts/verify-keda.sh)
+reproduces it.
+
+Scale-down drains. A terminating pod keeps its IP and answers `/health` until
+the process exits, so the router used to place new requests on it and they
+failed — ten of them during one scale-down. Discovery now excludes pods with a
+`deletionTimestamp`, and replicas get a `preStop` delay plus a grace period, so
+a generation already in flight finishes (§6.5). The same cycle now completes
+with no failures.
 
 ---
 

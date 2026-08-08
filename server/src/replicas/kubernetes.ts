@@ -79,7 +79,7 @@ export async function currentNamespace(): Promise<string> {
 
 type PodList = {
   items: Array<{
-    metadata: { name: string };
+    metadata: { name: string; deletionTimestamp?: string };
     status?: {
       podIP?: string;
       phase?: string;
@@ -96,6 +96,14 @@ type PodList = {
  * probe or route to. Pods that are not Ready are returned anyway, marked as
  * such, so a replica loading its weights appears in the dashboard as `loading`
  * rather than vanishing until it is ready.
+ *
+ * Terminating pods are excluded. A pod being scaled down keeps its IP and
+ * answers /health until the process actually exits, so without this check the
+ * router happily places new requests on a replica that is shutting down and
+ * they fail as `replica_unavailable`. This was observed during a KEDA
+ * scale-down: ten requests failed against pods that were already terminating.
+ * Kubernetes signals the intent by setting deletionTimestamp the moment
+ * deletion begins, which is what makes it visible before the process dies.
  */
 export async function listModelPods(modelId: string, port = 8080): Promise<DiscoveredPod[]> {
   const namespace = await currentNamespace();
@@ -109,7 +117,10 @@ export async function listModelPods(modelId: string, port = 8080): Promise<Disco
 
   const body = (await res.json()) as PodList;
   return body.items
-    .filter((pod) => pod.status?.podIP && pod.status.phase === "Running")
+    .filter(
+      (pod) =>
+        pod.status?.podIP && pod.status.phase === "Running" && !pod.metadata.deletionTimestamp
+    )
     .map((pod) => ({
       name: pod.metadata.name,
       endpointUrl: `http://${pod.status!.podIP}:${port}`,

@@ -18,6 +18,12 @@ spec:
       labels:
         controldeck.io/model-id: {{ .id }}
     spec:
+      # A replica that is scaled down must be allowed to finish what it is
+      # already generating (§6.5: requests making progress are never cut off).
+      # The preStop sleep holds the container open long enough for the router's
+      # next reconcile to notice the pod is terminating and stop placing on it,
+      # and the grace period then covers a generation already in flight.
+      terminationGracePeriodSeconds: {{ .drainSeconds | default 120 }}
       {{- if and (not ((kindIs "bool" .useMock) | ternary .useMock $.Values.mockModels.enabled)) .llamaSwap.weightsUrl }}
       # Weights are fetched into an emptyDir before the server starts. In a real
       # deployment these usually arrive on a PersistentVolume — set weightsUrl
@@ -86,6 +92,10 @@ spec:
           readinessProbe:
             httpGet: { path: /health, port: 8080 }
             periodSeconds: 5
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .preStopSeconds | default 15 }}"]
           resources:
             {{- toYaml $.Values.mockModels.resources | nindent 12 }}
       {{- else }}
@@ -106,6 +116,10 @@ spec:
             httpGet: { path: /health, port: 8080 }
             periodSeconds: 5
             failureThreshold: 60
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .preStopSeconds | default 15 }}"]
           resources:
             {{- toYaml .llamaSwap.resources | nindent 12 }}
           {{- if .llamaSwap.weightsUrl }}
