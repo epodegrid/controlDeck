@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 ### Added
 
@@ -22,6 +22,19 @@
   are therefore vendored into this chart's `crds/` (installed ahead of all
   templates) and the subchart's copies disabled, since two Helm-managed copies
   of one CRD fail on ownership. `refresh-keda-crd.sh` re-vendors both together.
+
+  Verified on a cluster with KEDA removed entirely: a single `helm install`
+  brought up the operator and the fleet scaled 1 → 3 → 1 under load.
+
+### Fixed
+
+- **CI fetched a chart repository it no longer needed.** The Bitnami repo and
+  `helm dependency build` were left over from when Postgres was a subchart.
+  Both are gone: CI now lints, renders and packages with no chart repositories
+  configured, which is the closest thing it has to the air-gapped cluster this
+  installs on — so un-vendoring the subchart fails there rather than on a
+  customer's cluster. It also renders the two paths a default template never
+  reaches: `keda.enabled=true`, and the full worked example.
 
 ## 0.3.1
 
