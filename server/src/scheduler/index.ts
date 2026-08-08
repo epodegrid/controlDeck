@@ -8,6 +8,8 @@ export {
   markStreamStarted,
   recordTokenEmitted,
   sweepStallTimeouts,
+  sweepFirstTokenTimeouts,
+  FIRST_TOKEN_TIMEOUT_MS,
   completeRequest,
   QUEUE_TIMEOUT_MS,
   STALL_TIMEOUT_MS,

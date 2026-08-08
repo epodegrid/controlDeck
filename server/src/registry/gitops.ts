@@ -34,6 +34,12 @@ export type GitOpsModel = {
   costBasis?: CostBasis;
   /** Falls back to the in-cluster Service for the model's id. */
   endpointUrl?: string;
+  /** Name the backend answers to; llama-swap routes on it. Defaults to `id`. */
+  upstreamModel?: string;
+  /** Port the container listens on. Defaults to 8080. */
+  port?: number;
+  /** Allowance for weight loading on the first request. */
+  firstTokenTimeoutMs?: number;
 };
 
 export type SyncResult = { upserted: number; removed: string[] };
@@ -86,8 +92,9 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
       await client.query(
         `INSERT INTO model_registry
            (id, name, class_label, model_class, capabilities, min_replicas, max_replicas,
-            system_prompt, cost_value, cost_basis, endpoint_url, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now())
+            system_prompt, cost_value, cost_basis, endpoint_url,
+            upstream_model, port, first_token_timeout_ms, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name,
            class_label = EXCLUDED.class_label,
@@ -99,6 +106,9 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
            cost_value = EXCLUDED.cost_value,
            cost_basis = EXCLUDED.cost_basis,
            endpoint_url = EXCLUDED.endpoint_url,
+           upstream_model = EXCLUDED.upstream_model,
+           port = EXCLUDED.port,
+           first_token_timeout_ms = EXCLUDED.first_token_timeout_ms,
            updated_at = now()`,
         [
           model.id,
@@ -112,6 +122,9 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
           model.costValue ?? 0,
           model.costBasis ?? "per_1k_tokens",
           model.endpointUrl ?? defaultEndpoint(model.id),
+          model.upstreamModel ?? model.id,
+          model.port ?? 8080,
+          model.firstTokenTimeoutMs ?? null,
         ]
       );
     }

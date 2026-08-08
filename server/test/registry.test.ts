@@ -13,6 +13,9 @@ const base: ModelRegistryRow = {
   cost_value: "0.0011",
   cost_basis: "per_1k_tokens",
   endpoint_url: "http://kestrel-9b.internal",
+  upstream_model: null,
+  port: 8080,
+  first_token_timeout_ms: null,
 };
 
 describe("mergeModelConfig", () => {

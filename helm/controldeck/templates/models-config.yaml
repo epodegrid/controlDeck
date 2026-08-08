@@ -9,6 +9,17 @@
 # Only the base config lives here. Dashboard edits are stored separately in
 # `model_registry_overrides` and merged on top at read time, so a redeploy can
 # never overwrite them.
+#
+# Three fields exist for the backend rather than for the platform:
+#   upstreamModel       llama-swap picks which process to proxy to from the
+#                       request's `model` field, so this must be a name that
+#                       container answers to — which need not be the
+#                       platform-level id shown to callers.
+#   port                Used for direct pod-IP discovery, which bypasses the
+#                       Service. Not every backend listens on 8080.
+#   firstTokenTimeoutMs How long a request may wait for its first token while
+#                       weights load on demand — separate from, and far longer
+#                       than, the 60s stall clock (PRD §6.5).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -31,6 +42,9 @@ data:
         "costValue" (.costValue | default 0)
         "costBasis" (.costBasis | default "per_1k_tokens")
         "endpointUrl" (printf "http://%s.%s.svc.cluster.local" .id $.Release.Namespace)
+        "upstreamModel" (.upstreamModel | default .id)
+        "port" (.port | default 8080)
+        "firstTokenTimeoutMs" (.firstTokenTimeoutMs | default 600000)
     ) }}
     {{- end }}
     {{ dict "models" $models | toJson }}

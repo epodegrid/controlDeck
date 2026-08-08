@@ -44,6 +44,31 @@ describe("GitOps model registration", () => {
     expect(all.find((m) => m.id === `${PREFIX}-a`)?.capabilities).toEqual(["chat", "tools"]);
   });
 
+  it("carries the backend fields a real model container needs", async () => {
+    await syncModelsFromConfig([
+      model("swap", {
+        // The platform id and the name the container answers to are different
+        // things: llama-swap routes on the latter, and a fleet exposes variant
+        // aliases the gateway has no reason to expose as separate models.
+        upstreamModel: "eve:thinking-coding",
+        port: 8000,
+        firstTokenTimeoutMs: 1_800_000,
+      }),
+      model("plain"),
+    ]);
+
+    const all = await listModels();
+    const swap = all.find((m) => m.id === `${PREFIX}-swap`)!;
+    expect(swap.upstreamModel).toBe("eve:thinking-coding");
+    expect(swap.port).toBe(8000);
+    expect(swap.firstTokenTimeoutMs).toBe(1_800_000);
+
+    // Defaults keep a plain declaration working unchanged.
+    const plain = all.find((m) => m.id === `${PREFIX}-plain`)!;
+    expect(plain.upstreamModel).toBe(`${PREFIX}-plain`);
+    expect(plain.port).toBe(8080);
+  });
+
   it("updates a model in place on redeploy", async () => {
     await syncModelsFromConfig([model("a", { name: "Before", maxReplicas: 2 })]);
     await syncModelsFromConfig([model("a", { name: "After", maxReplicas: 9 })]);

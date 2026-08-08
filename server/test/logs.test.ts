@@ -21,6 +21,31 @@ describe("model server log parsing", () => {
     expect(parseLine(`[debug] request finished`, "m")?.level).toBe("debug");
   });
 
+  it("drops successful health-probe lines, which drown out everything else", () => {
+    // kubelet polls /health every few seconds per pod. Real fleets produce
+    // thousands of these an hour and nothing else would be visible.
+    expect(
+      parseLine(`[INFO] Request 10.1.2.3 "GET /health HTTP/1.1" 200 2 "kube-probe" 6.083µs`, "m")
+    ).toBeNull();
+
+    // A failing probe is precisely what the panel is for.
+    const failing = parseLine(
+      `[INFO] Request 10.1.2.3 "GET /health HTTP/1.1" 503 2 "kube-probe" 6.083µs`,
+      "m"
+    );
+    expect(failing).not.toBeNull();
+  });
+
+  it("treats llama-swap's start-up connection retries as warnings, not errors", () => {
+    // Emitted once per retry while a model process starts. On a cold start of
+    // a large model this is the normal path, not a fault.
+    const line = parseLine(
+      `2026/08/08 09:53:17 http: proxy error: dial tcp [::1]:5801: connect: connection refused`,
+      "m"
+    );
+    expect(line?.level).toBe("warn");
+  });
+
   it("strips the Kubernetes timestamp into the ts field", () => {
     const line = parseLine(`2026-08-08T01:02:03.456789Z INFO [ x] hello`, "m");
     expect(line?.ts).toBe("2026-08-08T01:02:03.456789Z");

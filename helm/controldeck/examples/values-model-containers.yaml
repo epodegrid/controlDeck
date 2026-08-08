@@ -1,0 +1,133 @@
+# Example values for the epodegrid/model-containers fleet.
+#
+#   helm install controldeck ./helm/controldeck \
+#     -f helm/controldeck/examples/values-model-containers.yaml \
+#     --set postgresql.auth.password=...
+#
+# Those images bundle llama-swap in front of ik_llama.cpp's llama-server, with
+# the weights and a config.yaml baked in. Three things follow from that shape,
+# and each maps to a field below.
+#
+# 1. llama-swap chooses which process to proxy to from the request's `model`
+#    field — that is its whole routing mechanism. `upstreamModel` is the name
+#    (or alias) the container answers to. It is deliberately separate from the
+#    gateway's `id`, so the platform can expose one clean model name while
+#    pointing at a specific variant alias underneath.
+#
+# 2. Weights load on demand, on the first request naming a model, and the
+#    connection is held open while they do — minutes for a 35B GGUF.
+#    `firstTokenTimeoutMs` is the allowance for that. It is a separate clock
+#    from the 60s stall timeout, which only applies once tokens are flowing
+#    (PRD §6.5).
+#
+# 3. `/health` on llama-swap reports the proxy, not the model, so it returns
+#    200 while weights are still loading. The chart's readiness probe therefore
+#    gates on the proxy being up, and the wait for weights is absorbed by
+#    firstTokenTimeoutMs above rather than by readiness.
+#
+# The images are built per micro-architecture (zen4 / zen5). Pick the tag that
+# matches the node pool and pin it with nodeSelector — a mismatched build dies
+# with an illegal instruction at start-up, not with a graceful error.
+
+mockModels:
+  enabled: false
+
+models:
+  - id: eve
+    name: "Ornith-1.0 35B"
+    modelClass: large
+    capabilities: [chat, tools]
+    # An alias from the container's config.yaml. Change this to switch the
+    # served variant without changing the model name callers use.
+    upstreamModel: eve
+    port: 8080
+    firstTokenTimeoutMs: 1800000 # matches the image's healthCheckTimeout: 1800
+    minReplicas: 1
+    maxReplicas: 4
+    costBasis: per_1k_tokens
+    costValue: 0.0042
+    systemPrompt: ""
+    nodeSelector:
+      # Must match the image tag's micro-architecture.
+      kubernetes.io/arch: amd64
+      node.kubernetes.io/instance-type: Standard_D32as_v5
+    keda:
+      requestsPerReplica: 1
+      pollingIntervalSeconds: 15
+      cooldownSeconds: 600
+      scaleUpPods: 1
+      scaleUpPeriodSeconds: 60
+      scaleDownPods: 1
+      scaleDownPeriodSeconds: 120
+      # Long, because evicting a replica throws away a loaded 35B model and the
+      # next request pays the full load again.
+      scaleDownStabilizationSeconds: 900
+    # Generation in flight when a scale-down lands must be allowed to finish.
+    drainSeconds: 600
+    llamaSwap:
+      image: ghcr.io/epodegrid/eve:zen4
+      # No modelPath: the image ships its own config.yaml with weights baked in.
+      resources:
+        requests: { cpu: "8", memory: 48Gi }
+        limits: { cpu: "16", memory: 64Gi }
+
+  - id: wall-e
+    name: "Gemma 4 12B"
+    modelClass: fast
+    capabilities: [chat, tools, vision]
+    upstreamModel: wall-e
+    port: 8080
+    firstTokenTimeoutMs: 900000
+    minReplicas: 1
+    maxReplicas: 6
+    costBasis: per_1k_tokens
+    costValue: 0.0011
+    systemPrompt: ""
+    nodeSelector:
+      kubernetes.io/arch: amd64
+    keda:
+      requestsPerReplica: 2
+      pollingIntervalSeconds: 15
+      cooldownSeconds: 300
+      scaleUpPods: 1
+      scaleUpPeriodSeconds: 30
+      scaleDownPods: 1
+      scaleDownPeriodSeconds: 60
+      scaleDownStabilizationSeconds: 600
+    drainSeconds: 300
+    llamaSwap:
+      image: ghcr.io/epodegrid/wall-e:zen4
+      resources:
+        requests: { cpu: "4", memory: 20Gi }
+        limits: { cpu: "8", memory: 28Gi }
+
+  - id: go-4
+    name: "Nomic Embed"
+    modelClass: embedding
+    capabilities: [embeddings]
+    # Not a llama-swap container — a FastAPI service on a different port, which
+    # is exactly why the port is per-model rather than a constant.
+    upstreamModel: nomic-embed-text-v2
+    port: 8000
+    # Embedding models load fast and hold no KV cache worth waiting on.
+    firstTokenTimeoutMs: 300000
+    minReplicas: 1
+    maxReplicas: 3
+    costBasis: per_compute_second
+    costValue: 0.0003
+    systemPrompt: ""
+    keda:
+      requestsPerReplica: 4
+      pollingIntervalSeconds: 15
+      cooldownSeconds: 300
+      scaleUpPods: 1
+      scaleUpPeriodSeconds: 30
+      scaleDownPods: 1
+      scaleDownPeriodSeconds: 60
+      scaleDownStabilizationSeconds: 300
+    drainSeconds: 60
+    llamaSwap:
+      image: ghcr.io/epodegrid/go-4:latest
+      resources:
+        requests: { cpu: "2", memory: 8Gi }
+        limits: { cpu: "4", memory: 12Gi }

@@ -7,6 +7,12 @@ export type ChatToken = { token: string; done: boolean };
  */
 export type StreamChatParams = {
   endpointUrl: string;
+  /**
+   * The name the backend answers to. llama-swap selects which process to proxy
+   * to entirely from this field, so omitting it leaves a multi-model container
+   * with nothing to route on.
+   */
+  model?: string;
   messages: Array<{ role: string; content: unknown }>;
   systemPrompt?: string;
   /** Forwarded verbatim; llama-swap owns the tool-calling handling (§6.12). */
@@ -25,7 +31,7 @@ export type StreamChatParams = {
 export interface LlamaSwapClient {
   checkReady(endpointUrl: string): Promise<boolean>;
   streamChat(params: StreamChatParams): AsyncGenerator<ChatToken>;
-  embed(params: { endpointUrl: string; input: string | string[] }): Promise<number[][]>;
+  embed(params: { endpointUrl: string; input: string | string[]; model?: string }): Promise<number[][]>;
 }
 
 /**
@@ -57,6 +63,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
+        ...(params.model ? { model: params.model } : {}),
         messages,
         stream: true,
         // §6.12 is explicit that tool calling is a pass-through of the
@@ -112,12 +119,18 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     yield { token: "", done: true };
   }
 
-  async embed(params: { endpointUrl: string; input: string | string[] }): Promise<number[][]> {
+  async embed(params: { endpointUrl: string; input: string | string[]; model?: string }): Promise<number[][]> {
     const res = await fetch(`${params.endpointUrl}/v1/embeddings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ input: params.input }),
+      // Same reason as chat: a multi-model embedding service picks the model
+      // from this field.
+      body: JSON.stringify({ ...(params.model ? { model: params.model } : {}), input: params.input }),
     });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(`Embedding backend returned ${res.status}: ${detail.slice(0, 300)}`);
+    }
     const json = (await res.json()) as { data: Array<{ embedding: number[] }> };
     return json.data.map((d) => d.embedding);
   }
@@ -141,7 +154,7 @@ export class FakeLlamaSwapClient implements LlamaSwapClient {
     yield { token: "", done: true };
   }
 
-  async embed(params: { input: string | string[] }): Promise<number[][]> {
+  async embed(params: { input: string | string[]; model?: string }): Promise<number[][]> {
     const inputs = Array.isArray(params.input) ? params.input : [params.input];
     return inputs.map((text) => {
       const seed = Array.from(text).reduce((acc, ch) => acc + ch.charCodeAt(0), 0);

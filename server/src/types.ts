@@ -55,6 +55,21 @@ export type ModelConfig = {
   costValue: number;
   costBasis: CostBasis;
   endpointUrl: string;
+  /**
+   * Name the backend answers to. llama-swap routes on the `model` field in the
+   * request body, and that name — plus its variant aliases — is the
+   * container's, not necessarily the platform's. Defaults to the model id.
+   */
+  upstreamModel: string;
+  /** Port the container listens on. Not every backend uses 8080. */
+  port: number;
+  /**
+   * How long to wait for the first token before giving up. Distinct from the
+   * stall clock, which §6.5 scopes to "once generation has started": a
+   * llama-swap container loads weights on the first request, which for a large
+   * GGUF takes minutes of silence that is not a stall.
+   */
+  firstTokenTimeoutMs: number | null;
   configSource: "gitops" | "override";
   hasOverride: boolean;
 };

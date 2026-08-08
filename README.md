@@ -284,6 +284,27 @@ helm upgrade --install controldeck ./helm/controldeck \
 
 Models are registered as config-as-code under `models:` in `values.yaml` (§6.2). Each entry produces a Deployment, a Service, and a KEDA `ScaledObject`.
 
+### Pointing at real model containers
+
+Three per-model fields exist for the backend rather than for the platform, and
+a llama-swap image needs all three:
+
+| Field | Why |
+| --- | --- |
+| `upstreamModel` | llama-swap picks which process to proxy to entirely from the request's `model` field. This is the name (or alias) the container answers to, kept separate from the `id` callers use. |
+| `port` | Not every backend listens on 8080 — a purpose-built embedding service often does not. Used for pod-IP discovery, the Service target and the container port. |
+| `firstTokenTimeoutMs` | Weights load on demand, on the first request naming a model, and the connection is held open in silence while they do. This is the allowance for that wait — a different, much longer clock than the 60s stall timeout, which only applies once tokens are flowing (§6.5). |
+
+A worked example for a full fleet, including a non-llama-swap embedding
+service on a different port, is in
+[`helm/controldeck/examples/values-model-containers.yaml`](helm/controldeck/examples/values-model-containers.yaml).
+
+One thing to know about readiness: llama-swap's `/health` reports the proxy,
+not the model, and returns 200 with nothing loaded. Readiness therefore gates
+on the proxy being up, and the wait for weights is absorbed on the request path
+by `firstTokenTimeoutMs`. Tightening the probe into a model-readiness gate
+would leave the pod permanently unready.
+
 ### Trying it on a cluster without GPUs
 
 `mockModels.enabled=true` swaps the llama-swap image for the mock model across the whole fleet. Useful for validating a chart change, or for a minikube walkthrough:

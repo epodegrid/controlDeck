@@ -91,7 +91,7 @@ export async function reconcileReplicas(): Promise<ReconcileSummary> {
     let candidates: Array<{ id: string; endpointUrl: string }>;
     if (inCluster()) {
       try {
-        const pods = await listModelPods(model.id);
+        const pods = await listModelPods(model.id, model.port);
         candidates = pods.map((pod) => ({ id: pod.name, endpointUrl: pod.endpointUrl }));
       } catch (err) {
         // A denied or failing pod list must not wipe the fleet from the

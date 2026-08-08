@@ -150,6 +150,9 @@ export function registerV1Routes(
     // these silently produced answers that looked fine and ignored the
     // caller's temperature, token ceiling and stop sequences.
     const sampling = {
+      // llama-swap routes on this; without it a multi-model container has
+      // nothing to select on.
+      model: model.upstreamModel,
       temperature: body.temperature,
       topP: body.top_p,
       maxTokens: body.max_tokens,
@@ -323,6 +326,7 @@ export function registerV1Routes(
     const embeddings = await deps.llamaSwap.embed({
       endpointUrl: placement.endpointUrl || model.endpointUrl,
       input: body.input,
+      model: model.upstreamModel,
     });
     const inputs = Array.isArray(body.input) ? body.input : [body.input];
     const inputTokens = inputs.reduce((acc, t) => acc + Math.ceil(t.length / 4), 0);

@@ -24,6 +24,21 @@ spec:
       # next reconcile to notice the pod is terminating and stop placing on it,
       # and the grace period then covers a generation already in flight.
       terminationGracePeriodSeconds: {{ .drainSeconds | default 120 }}
+      {{- with .nodeSelector }}
+      # Model images are often built per micro-architecture (e.g. separate
+      # zen4/zen5 tags). Placing them on a node pool that matches is not an
+      # optimisation — a mismatched build fails at start-up with an illegal
+      # instruction.
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .runtimeClassName }}
+      runtimeClassName: {{ . }}
+      {{- end }}
       {{- if and (not ((kindIs "bool" .useMock) | ternary .useMock $.Values.mockModels.enabled)) .llamaSwap.weightsUrl }}
       # Weights are fetched into an emptyDir before the server starts. In a real
       # deployment these usually arrive on a PersistentVolume — set weightsUrl
@@ -88,9 +103,9 @@ spec:
             {{- end }}
             {{- end }}
           ports:
-            - containerPort: 8080
+            - containerPort: {{ .port | default 8080 }}
           readinessProbe:
-            httpGet: { path: /health, port: 8080 }
+            httpGet: { path: /health, port: {{ .port | default 8080 }} }
             periodSeconds: 5
           lifecycle:
             preStop:
@@ -105,15 +120,34 @@ spec:
           args:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if or .llamaSwap.modelPath .llamaSwap.env }}
           env:
+            {{- with .llamaSwap.modelPath }}
+            # Only for images that take the weights path at runtime. A container
+            # that ships its own llama-swap config.yaml (weights baked in or
+            # mounted at a fixed path) needs nothing here.
             - name: MODEL_PATH
-              value: {{ .llamaSwap.modelPath }}
+              value: {{ . | quote }}
+            {{- end }}
+            {{- range $k, $v := .llamaSwap.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
           ports:
-            - containerPort: 8080
+            - containerPort: {{ .port | default 8080 }}
           readinessProbe:
-            # llama.cpp/llama-swap hold /health non-200 until the model is
-            # loaded, which is exactly the readiness gate PRD §6.4 needs.
-            httpGet: { path: /health, port: 8080 }
+            # NOTE: this gates on the *proxy* being up, not on weights being
+            # loaded. Plain llama.cpp holds /health non-200 until the model is
+            # ready, but llama-swap answers 200 "OK" as soon as its own process
+            # starts — it loads a model on demand, on the first request that
+            # names it, so there is nothing to be ready for beforehand.
+            #
+            # The wait for weights is therefore absorbed on the request path
+            # instead, by the model's firstTokenTimeoutMs allowance. Do not
+            # "tighten" this into a model-readiness gate: with llama-swap the
+            # pod would simply never become ready.
+            httpGet: { path: /health, port: {{ .port | default 8080 }} }
             periodSeconds: 5
             failureThreshold: 60
           lifecycle:
@@ -122,6 +156,7 @@ spec:
                 command: ["sleep", "{{ .preStopSeconds | default 15 }}"]
           resources:
             {{- toYaml .llamaSwap.resources | nindent 12 }}
+
           {{- if .llamaSwap.weightsUrl }}
           volumeMounts:
             - { name: models, mountPath: /models }
@@ -150,7 +185,7 @@ spec:
     controldeck.io/model-id: {{ .id }}
   ports:
     - port: 80
-      targetPort: 8080
+      targetPort: {{ .port | default 8080 }}
       name: http
 ---
 apiVersion: keda.sh/v1alpha1

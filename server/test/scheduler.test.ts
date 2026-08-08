@@ -10,6 +10,7 @@ import {
   markStreamStarted,
   recordTokenEmitted,
   sweepStallTimeouts,
+  sweepFirstTokenTimeouts,
   completeRequest,
 } from "../src/scheduler/queue.js";
 import { FakeKedaClient, MetricsKedaClient } from "../src/adapters/keda.js";
@@ -58,6 +59,7 @@ async function insertRequestRow(id: string, overrides: Partial<{
   arrivedAt: string;
   startedAt: string | null;
   lastTokenAt: string | null;
+  firstTokenAt: string | null;
   replicaId: string | null;
 }> = {}) {
   const pool = getPool();
@@ -66,13 +68,17 @@ async function insertRequestRow(id: string, overrides: Partial<{
     arrivedAt = "now()",
     startedAt = null,
     lastTokenAt = null,
+    // Defaults to last_token_at: a row that has a last token by definition had
+    // a first one. Only a cold start (still loading weights) leaves it null.
+    firstTokenAt = lastTokenAt,
     replicaId = null,
   } = overrides;
   const startedAtSql = startedAt === null ? "NULL" : startedAt;
   const lastTokenAtSql = lastTokenAt === null ? "NULL" : lastTokenAt;
+  const firstTokenAtSql = firstTokenAt === null ? "NULL" : firstTokenAt;
   await pool.query(
-    `INSERT INTO requests (id, caller_oid, caller_name, requested_model, routed_model, capabilities, status, replica_id, arrived_at, started_at, last_token_at)
-     VALUES ($1, 'oid-1', 'Test Caller', $2, $2, '{}', $3, $4, ${arrivedAt}, ${startedAtSql}, ${lastTokenAtSql})`,
+    `INSERT INTO requests (id, caller_oid, caller_name, requested_model, routed_model, capabilities, status, replica_id, arrived_at, started_at, last_token_at, first_token_at)
+     VALUES ($1, 'oid-1', 'Test Caller', $2, $2, '{}', $3, $4, ${arrivedAt}, ${startedAtSql}, ${lastTokenAtSql}, ${firstTokenAtSql})`,
     [id, MODEL_ID, status, replicaId]
   );
 }
@@ -568,6 +574,95 @@ describe("scheduler", () => {
       expect(byId[stalledId].status).toBe("stall_timeout");
       expect(byId[stalledId].error_code).toBe("stall_timeout");
       expect(byId[activeId].status).toBe("streaming");
+    });
+
+    it("a cold start that has emitted no token yet is not swept as a stall", async () => {
+      // A llama-swap container loads model weights on the first request and
+      // stays silent for minutes while it does. Judging that against the 60s
+      // inactivity threshold would kill exactly the requests behaving
+      // correctly — and would do it on every scale-up.
+      const loadingId = randomUUID();
+      await insertRequestRow(loadingId, {
+        status: "streaming",
+        startedAt: "now() - interval '5 minutes'",
+        lastTokenAt: "now() - interval '5 minutes'",
+        firstTokenAt: null,
+      });
+
+      const swept = await sweepStallTimeouts(60000);
+      expect(swept).not.toContain(loadingId);
+
+      const pool = getPool();
+      const { rows } = await pool.query("SELECT status FROM requests WHERE id = $1", [loadingId]);
+      expect(rows[0].status).toBe("streaming");
+    });
+
+    it("sweepFirstTokenTimeouts fails a cold start only once its own allowance is exceeded", async () => {
+      const pool = getPool();
+      await pool.query("UPDATE model_registry SET first_token_timeout_ms = 600000 WHERE id = $1", [
+        MODEL_ID,
+      ]);
+
+      const withinId = randomUUID();
+      const beyondId = randomUUID();
+      await insertRequestRow(withinId, {
+        status: "streaming",
+        startedAt: "now() - interval '5 minutes'",
+        firstTokenAt: null,
+      });
+      await insertRequestRow(beyondId, {
+        status: "streaming",
+        startedAt: "now() - interval '20 minutes'",
+        firstTokenAt: null,
+      });
+
+      const swept = await sweepFirstTokenTimeouts();
+
+      expect(swept).toContain(beyondId);
+      expect(swept).not.toContain(withinId);
+      const { rows } = await pool.query(
+        "SELECT id, status, error_code FROM requests WHERE id = ANY($1)",
+        [[withinId, beyondId]]
+      );
+      const byId = Object.fromEntries(rows.map((r: any) => [r.id, r]));
+      expect(byId[beyondId].status).toBe("stall_timeout");
+      expect(byId[beyondId].error_code).toBe("stall_timeout");
+      expect(byId[withinId].status).toBe("streaming");
+    });
+
+    it("sweepFirstTokenTimeouts leaves a stream that has already produced tokens alone", async () => {
+      // Once generation has started, the 60s inactivity clock owns the request;
+      // the long first-token allowance must not become a second, laxer one.
+      const generatingId = randomUUID();
+      await insertRequestRow(generatingId, {
+        status: "streaming",
+        startedAt: "now() - interval '3 hours'",
+        lastTokenAt: "now()",
+      });
+
+      const swept = await sweepFirstTokenTimeouts(1000);
+      expect(swept).not.toContain(generatingId);
+    });
+
+    it("recordTokenEmitted stamps first_token_at once and never moves it", async () => {
+      const id = randomUUID();
+      await insertRequestRow(id, { status: "streaming", firstTokenAt: null });
+      const pool = getPool();
+
+      await recordTokenEmitted(id);
+      const first = (
+        await pool.query("SELECT first_token_at FROM requests WHERE id = $1", [id])
+      ).rows[0].first_token_at;
+      expect(first).not.toBeNull();
+
+      await recordTokenEmitted(id);
+      const again = (
+        await pool.query("SELECT first_token_at, last_token_at FROM requests WHERE id = $1", [id])
+      ).rows[0];
+      expect(new Date(again.first_token_at).getTime()).toBe(new Date(first).getTime());
+      expect(new Date(again.last_token_at).getTime()).toBeGreaterThanOrEqual(
+        new Date(first).getTime()
+      );
     });
 
     it("a long-running but progressing stream is never swept (no fixed wall-clock cap)", async () => {

@@ -99,8 +99,8 @@ export async function seed(options: { force?: boolean } = {}) {
 
   for (const m of models) {
     await pool.query(
-      `INSERT INTO model_registry (id, name, class_label, model_class, capabilities, min_replicas, max_replicas, system_prompt, cost_value, cost_basis, endpoint_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `INSERT INTO model_registry (id, name, class_label, model_class, capabilities, min_replicas, max_replicas, system_prompt, cost_value, cost_basis, endpoint_url, upstream_model)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$1)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name, class_label = EXCLUDED.class_label, model_class = EXCLUDED.model_class,
          capabilities = EXCLUDED.capabilities, min_replicas = EXCLUDED.min_replicas, max_replicas = EXCLUDED.max_replicas,

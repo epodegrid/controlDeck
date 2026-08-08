@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+Compatibility with real llama-swap model containers, verified against a live
+llama-swap running ik_llama.cpp's `llama-server`.
+
+### Fixed
+
+- **The `model` field was never sent upstream.** llama-swap selects which model
+  process to proxy to entirely from it; without it every request came back
+  `{"error":"no model id could be identified"}`. Confirmed against a real
+  container, not inferred.
+- **A cold start was killed as a stall.** Weights load on demand, on the first
+  request naming a model, and the connection is held open in silence while
+  they do — minutes for a large GGUF. The 60s inactivity clock swept exactly
+  those requests. PRD §6.5 scopes that clock to "once generation has started",
+  so the wait for a first token is now its own, far longer allowance
+  (`firstTokenTimeoutMs`, default 10 minutes). A 90-second silent load now
+  completes; previously it failed at 60 seconds, on every scale-up.
+- **The backend port was hardcoded to 8080**, making a service on any other
+  port unreachable. It is per-model now, in pod discovery, the Service
+  target and the container port alike.
+- **Readiness gating on llama-swap's `/health` was a no-op.** It reports the
+  proxy, not the model, and answers 200 "OK" with nothing loaded. The chart
+  says so where the probe is defined, and the first-token allowance covers the
+  load instead.
+- **Log noise.** Successful health probes are dropped (kubelet polls every few
+  seconds per pod), and llama-swap's connection retries during a model load are
+  warnings rather than errors — a cold start no longer paints the panel red.
+
+### Added
+
+- **`upstreamModel`**, so the model name callers see is decoupled from the name
+  the container answers to. A fleet's variant aliases (`eve:thinking-coding`)
+  can be pointed at without exposing them as separate models.
+- **`nodeSelector` / `tolerations` / `runtimeClassName` per model.** Model
+  images are commonly built per micro-architecture; a mismatched build dies
+  with an illegal instruction rather than a graceful error.
+- **`helm/controldeck/examples/values-model-containers.yaml`** — a worked
+  example for a llama-swap fleet, including a non-llama-swap embedding service
+  on a different port.
+
 ## 0.2.0
 
 The release that makes a Kubernetes deployment actually work. Verified against

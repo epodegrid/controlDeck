@@ -12,6 +12,9 @@ export type ModelRegistryRow = {
   cost_value: string | number;
   cost_basis: ModelConfig["costBasis"];
   endpoint_url: string;
+  upstream_model: string | null;
+  port: number | null;
+  first_token_timeout_ms: number | null;
 };
 
 export type OverrideFields = Partial<{
@@ -42,6 +45,11 @@ export function mergeModelConfig(base: ModelRegistryRow, override: OverrideField
     costValue: override?.costValue ?? Number(base.cost_value),
     costBasis: override?.costBasis ?? base.cost_basis,
     endpointUrl: base.endpoint_url,
+    // The backend's own name for the model; the platform id is only the
+    // default, since a container may answer to something else entirely.
+    upstreamModel: base.upstream_model || base.id,
+    port: base.port ?? 8080,
+    firstTokenTimeoutMs: base.first_token_timeout_ms ?? null,
     configSource: hasOverride ? "override" : "gitops",
     hasOverride,
   };

@@ -38,10 +38,28 @@ export function configuredLogSource(): LogSourceKind {
   return process.env.KUBERNETES_SERVICE_HOST ? "kubernetes" : "endpoint";
 }
 
+/**
+ * Successful readiness-probe hits. kubelet polls /health every few seconds per
+ * pod, so on any real fleet these outnumber everything an operator actually
+ * wants to see by orders of magnitude. Only 200s are dropped — a failing probe
+ * is exactly the kind of line the panel exists for.
+ */
+const HEALTH_PROBE_NOISE = /"(?:GET|HEAD) \/health[^"]*"\s+200\b/;
+
+/**
+ * llama-swap retries the connection to a model process while that process is
+ * still starting, logging one of these per attempt. During a cold start — the
+ * normal path, since it loads models on demand — a 90-second load produces a
+ * wall of them. They are worth showing, because a connection that never
+ * succeeds is a genuine fault, but they are not errors on their own.
+ */
+const BACKEND_STARTING = /http: proxy error: dial tcp .*(connection refused|no such host)/i;
+
 /** Parses a line of container stdout into the shape the dashboard renders. */
 export function parseLine(raw: string, source: string): LogLine | null {
   const text = raw.trimEnd();
   if (!text) return null;
+  if (HEALTH_PROBE_NOISE.test(text)) return null;
 
   // Kubernetes prefixes each line with an RFC3339 timestamp when asked to.
   const withTs = /^(\d{4}-\d{2}-\d{2}T[\d:.]+Z?)\s+(.*)$/.exec(text);
@@ -65,6 +83,8 @@ export function parseLine(raw: string, source: string): LogLine | null {
     const m = prefixed[1].toLowerCase();
     level = m === "warning" ? "warn" : (m as LogLine["level"]);
     message = prefixed[2];
+  } else if (BACKEND_STARTING.test(message)) {
+    level = "warn";
   } else if (/\b(error|fatal|panic|failed|exception)\b/i.test(message)) {
     level = "error";
   } else if (/\b(warn|warning|retry|degraded)\b/i.test(message)) {

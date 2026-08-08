@@ -8,6 +8,21 @@ export const QUEUE_TIMEOUT_MS = Number(process.env.QUEUE_TIMEOUT_MS ?? 300_000);
 export const STALL_TIMEOUT_MS = Number(process.env.STALL_TIMEOUT_MS ?? 60_000);
 
 /**
+ * How long a request may wait for its *first* token.
+ *
+ * §6.5 scopes the stall clock to "once a replica has been assigned and
+ * generation has started". Before the first token nothing has started: a
+ * llama-swap container loads model weights on demand, and a 35B GGUF spread
+ * over several shards takes minutes of complete silence to become ready. Timing
+ * that against the 60s inactivity threshold would kill precisely the requests
+ * that are behaving correctly, on exactly the cold starts autoscaling creates.
+ *
+ * Ten minutes by default, and overridable per model — a small model has no
+ * business taking that long, and a large one may need more.
+ */
+export const FIRST_TOKEN_TIMEOUT_MS = Number(process.env.FIRST_TOKEN_TIMEOUT_MS ?? 600_000);
+
+/**
  * Weight given to the newest throughput sample when updating a replica's
  * running tokens/sec. 0.3 settles within roughly ten requests while still
  * moving quickly when a replica's real speed changes.
@@ -121,7 +136,15 @@ export async function markStreamStarted(requestId: string, replicaId: string): P
  */
 export async function recordTokenEmitted(requestId: string): Promise<void> {
   const pool = getPool();
-  await pool.query(`UPDATE requests SET last_token_at = now() WHERE id = $1`, [requestId]);
+  // first_token_at is stamped once and never moved, which is what lets the
+  // sweeps tell "still loading weights" from "was generating and stopped".
+  await pool.query(
+    `UPDATE requests
+     SET last_token_at = now(),
+         first_token_at = COALESCE(first_token_at, now())
+     WHERE id = $1`,
+    [requestId]
+  );
 }
 
 /**
@@ -134,15 +157,46 @@ export async function recordTokenEmitted(requestId: string): Promise<void> {
  */
 export async function sweepStallTimeouts(thresholdMs: number = STALL_TIMEOUT_MS): Promise<string[]> {
   const pool = getPool();
+  // Only requests that have actually produced a token are subject to the
+  // inactivity clock. One still waiting for its first is covered by
+  // sweepFirstTokenTimeouts, which allows far longer.
   const { rows } = await pool.query<{ id: string }>(
     `UPDATE requests
      SET status = 'stall_timeout',
          error_code = 'stall_timeout',
          completed_at = now()
      WHERE status = 'streaming'
+       AND first_token_at IS NOT NULL
        AND last_token_at < now() - ($1 || ' milliseconds')::interval
      RETURNING id`,
     [thresholdMs]
+  );
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Fails requests that never produced a first token within the allowance.
+ *
+ * Uses the model's own `first_token_timeout_ms` where set, so a small model is
+ * not given a large model's patience.
+ */
+export async function sweepFirstTokenTimeouts(
+  defaultThresholdMs: number = FIRST_TOKEN_TIMEOUT_MS
+): Promise<string[]> {
+  const pool = getPool();
+  const { rows } = await pool.query<{ id: string }>(
+    `UPDATE requests r
+     SET status = 'stall_timeout',
+         error_code = 'stall_timeout',
+         completed_at = now()
+     FROM model_registry m
+     WHERE r.routed_model = m.id
+       AND r.status = 'streaming'
+       AND r.first_token_at IS NULL
+       AND r.started_at < now() -
+           (COALESCE(m.first_token_timeout_ms, $1) || ' milliseconds')::interval
+     RETURNING r.id`,
+    [defaultThresholdMs]
   );
   return rows.map((r) => r.id);
 }
