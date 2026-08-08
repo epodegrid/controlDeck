@@ -158,12 +158,18 @@ jobs:
       # only a minikube user would otherwise exercise.
       - name: Lint and render the chart
         run: |
-          # Chart.lock pins the Postgres subchart, but the repo alias still has
-          # to be resolvable before `dependency build` can fetch it. A fresh
-          # runner has no repos configured.
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo update
-          helm dependency build helm/controldeck
+          # No `helm repo add` and no `dependency build` on purpose. The KEDA
+          # subchart is committed under charts/, so a runner with no chart
+          # repositories configured is the closest thing CI has to the
+          # air-gapped cluster this is meant to install on. If someone
+          # un-vendors it, this step fails here rather than at a customer site.
           helm lint helm/controldeck
           helm template controldeck helm/controldeck > /dev/null
           helm template controldeck helm/controldeck --set mockModels.enabled=true > /dev/null
+          # The bundled-autoscaler path renders KEDA itself, which is the half
+          # a default render never touches.
+          helm template controldeck helm/controldeck --set keda.enabled=true > /dev/null
+          # And the full worked example, which is what an operator actually
+          # deploys.
+          helm template controldeck helm/controldeck \
+            -f helm/controldeck/examples/values-model-containers.yaml > /dev/null

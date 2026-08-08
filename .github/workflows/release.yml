@@ -121,9 +121,9 @@ jobs:
         run: |
           helm registry login ${{ env.REGISTRY }} \
             -u ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }}
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo update
-          helm dependency build helm/controldeck
+          # Packaged straight from the tree: the KEDA subchart is committed
+          # under charts/, so the published chart carries it and installs
+          # without reaching a chart repository.
           helm package helm/controldeck --version "$VERSION" --app-version "$VERSION" -d dist
           # Charts live in the same registry as the images they deploy, so a
           # mirror or pull-through proxy only has to be pointed at one place.
