@@ -2,8 +2,8 @@ apiVersion: v2
 name: controldeck
 description: Self-hosted, OpenAI-API-compatible LLM gateway with Entra ID auth, cost tracking, audit logging, and dynamic autoscaling.
 type: application
-version: 0.2.0
-appVersion: "0.2.0"
+version: 0.3.0
+appVersion: "0.3.0"
 home: https://github.com/your-org/controldeck
 keywords:
   - llm

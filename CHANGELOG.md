@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
-Compatibility with real llama-swap model containers, verified against a live
-llama-swap running ik_llama.cpp's `llama-server`.
+Compatibility with real llama-swap model containers. Verified against a live
+llama-swap running `llama-server`, and on minikube with KEDA for the cluster
+paths.
 
 ### Fixed
 
@@ -25,6 +26,10 @@ llama-swap running ik_llama.cpp's `llama-server`.
   proxy, not the model, and answers 200 "OK" with nothing loaded. The chart
   says so where the probe is defined, and the first-token allowance covers the
   load instead.
+- **A non-default port was declared but never configured.** The chart set the
+  container port, Service target and probe from a model's `port`, while the
+  mock container went on listening on 8080 — so a model on any other port never
+  passed readiness. Found on minikube, not by reading the template.
 - **Log noise.** Successful health probes are dropped (kubelet polls every few
   seconds per pod), and llama-swap's connection retries during a model load are
   warnings rather than errors — a cold start no longer paints the panel red.

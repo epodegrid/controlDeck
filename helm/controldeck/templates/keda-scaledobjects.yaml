@@ -80,6 +80,13 @@ spec:
           image: "{{ $.Values.mockModels.image.repository }}:{{ $.Values.mockModels.image.tag | default $.Chart.AppVersion }}"
           imagePullPolicy: {{ $.Values.mockModels.image.pullPolicy }}
           env:
+            # The mock fleet's container is the chart's own, so a non-default
+            # port has to be passed to it. A real model image carries its
+            # listen port in its own config, which is why `port` is otherwise
+            # descriptive — it tells the router where to reach the container,
+            # it does not configure the container.
+            - name: PORT
+              value: {{ .port | default 8080 | quote }}
             - name: MODEL_ID
               value: {{ .id | quote }}
             - name: CAPABILITIES
