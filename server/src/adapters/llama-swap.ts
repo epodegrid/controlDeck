@@ -62,7 +62,27 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     // PRD §6.11 — the per-model system prompt is a *default*, not an override.
     // If the caller sent their own system message we leave it authoritative
     // and inject nothing.
-    const callerSetSystemPrompt = params.messages.some((m) => m.role === "system");
+    //
+    // Agent tools (opencode, Copilot, Hermes and friends) send a carefully
+    // built system prompt describing their tools and output contract. Prefixing
+    // the operator's default in front of it gives the model two sets of
+    // instructions, and the platform's — being first — tends to win in most
+    // chat templates. That breaks the caller's tool loop in ways that look like
+    // the model misbehaving.
+    //
+    // `developer` counts too: it is what OpenAI's reasoning models use in place
+    // of `system`, so a client targeting those would otherwise get the default
+    // injected alongside its own instructions.
+    //
+    // Whitespace-only content does not count. A client that sends
+    // `{role: "system", content: ""}` as a placeholder has expressed no
+    // intention, and honouring it would silently discard the operator's
+    // configured prompt.
+    const callerSetSystemPrompt = params.messages.some(
+      (m) =>
+        (m.role === "system" || m.role === "developer") &&
+        (typeof m.content === "string" ? m.content.trim() !== "" : m.content != null)
+    );
     const messages =
       params.systemPrompt && !callerSetSystemPrompt
         ? [{ role: "system", content: params.systemPrompt }, ...params.messages]

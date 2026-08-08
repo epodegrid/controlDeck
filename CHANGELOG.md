@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **A `developer` message did not suppress the platform's system prompt.** It is
+  what clients targeting OpenAI's reasoning models send in place of `system`, so
+  such a caller got the operator's default injected alongside its own
+  instructions — two competing sets, with the platform's first and therefore
+  dominant in most chat templates. It now counts as a system message, in
+  injection and in the prefix-cache affinity key alike.
+- **An empty system message suppressed the default.** A client sending
+  `{role: "system", content: ""}` as a placeholder silently lost the operator's
+  configured prompt. Whitespace-only content no longer counts as a caller
+  prompt.
+
 ## 0.4.0
 
 ### Added

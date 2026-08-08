@@ -37,6 +37,31 @@ real client can parse them or that the request the caller composed survived the
 trip. Pointing the SDK at the gateway found six things that hand-testing had
 not, including a request shape that crashed the router outright.
 
+### System prompts, and agent tools
+
+The per-model system prompt is a **default, not an override** (§6.11). If the
+caller sends their own system message, the platform injects nothing and passes
+theirs through untouched.
+
+This matters for agent tools — opencode, Copilot, Hermes, Open WebUI and the
+rest send a carefully constructed system prompt describing their tools and
+output contract. Prefixing an operator default in front of it would give the
+model two sets of instructions, and the platform's, being first, tends to win
+in most chat templates; the caller's tool loop then breaks in ways that look
+like the model misbehaving.
+
+`developer` counts as a system message too — it is what clients targeting
+OpenAI's reasoning models send instead. An empty or whitespace-only system
+message does not: a placeholder expresses no intention, and honouring it would
+silently discard the operator's configured prompt.
+
+| Caller sends | Model receives |
+|---|---|
+| nothing | the model's configured prompt |
+| `system` with content | the caller's, alone |
+| `developer` with content | the caller's, alone |
+| `system` that is empty | the model's configured prompt |
+
 Forwarded verbatim to the model server: `tools`, `tool_choice`, `temperature`,
 `top_p`, `max_tokens`, `stop`, `seed`, `presence_penalty`, `frequency_penalty`,
 `response_format`. A caller who sets temperature for reproducibility, or

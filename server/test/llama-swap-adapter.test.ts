@@ -207,6 +207,77 @@ describe("HttpLlamaSwapClient wire format", () => {
     expect(seen).toEqual([{ token: "real", reasoning: undefined }]);
   });
 
+  /**
+   * §6.11 — the per-model prompt is a default, not an override.
+   *
+   * This matters most for agent tools. opencode, Copilot, Hermes and the rest
+   * send a carefully constructed system prompt describing their tools and
+   * output contract; prefixing an operator default in front of it gives the
+   * model two sets of instructions, and the platform's — being first — tends
+   * to win in most chat templates. The caller's tool loop then breaks in ways
+   * that look like the model misbehaving.
+   */
+  async function systemMessagesSentFor(messages: Array<{ role: string; content: unknown }>) {
+    recorded.length = 0;
+    respond = (_p, res) => sseModelResponse(res, "ok");
+    const client = new HttpLlamaSwapClient();
+    for await (const _ of client.streamChat({
+      endpointUrl: baseUrl,
+      model: "ornith",
+      systemPrompt: "platform default",
+      messages,
+    })) {
+      // drain
+    }
+    return recorded.at(-1)!.body.messages;
+  }
+
+  it("injects the platform default only when the caller sent no system prompt", async () => {
+    const sent = await systemMessagesSentFor([{ role: "user", content: "hi" }]);
+    expect(sent[0]).toEqual({ role: "system", content: "platform default" });
+  });
+
+  it("stays out of the way of an agent tool's own system prompt", async () => {
+    const sent = await systemMessagesSentFor([
+      { role: "system", content: "You are opencode. Use the tools provided." },
+      { role: "user", content: "hi" },
+    ]);
+    expect(sent.filter((m: any) => m.role === "system")).toHaveLength(1);
+    expect(sent[0].content).toBe("You are opencode. Use the tools provided.");
+  });
+
+  it("treats a `developer` message as the caller's system prompt", async () => {
+    // OpenAI's reasoning models take `developer` in place of `system`, so a
+    // client targeting those would otherwise get the default injected
+    // alongside its own instructions.
+    const sent = await systemMessagesSentFor([
+      { role: "developer", content: "You are a coding agent." },
+      { role: "user", content: "hi" },
+    ]);
+    expect(sent.some((m: any) => m.role === "system")).toBe(false);
+    expect(sent).toHaveLength(2);
+  });
+
+  it("still injects when the caller's system message is empty", async () => {
+    // A placeholder expresses no intention; honouring it would silently
+    // discard the operator's configured prompt.
+    const sent = await systemMessagesSentFor([
+      { role: "system", content: "   " },
+      { role: "user", content: "hi" },
+    ]);
+    expect(sent[0]).toEqual({ role: "system", content: "platform default" });
+  });
+
+  it("respects a system message that arrives after the first turn", async () => {
+    // Some clients append their instructions rather than leading with them.
+    const sent = await systemMessagesSentFor([
+      { role: "user", content: "hi" },
+      { role: "system", content: "Answer only in JSON." },
+    ]);
+    expect(sent.filter((m: any) => m.role === "system")).toHaveLength(1);
+    expect(sent.filter((m: any) => m.role === "system")[0].content).toBe("Answer only in JSON.");
+  });
+
   it("leaves a caller-supplied system message authoritative (PRD §6.11)", async () => {
     recorded.length = 0;
     respond = (_p, res) => sseModelResponse(res, "ok");

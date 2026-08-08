@@ -85,7 +85,10 @@ export type ModelConfig = {
 };
 
 export type ChatMessage = {
-  role: "system" | "user" | "assistant" | "tool";
+  // `developer` is OpenAI's replacement for `system` on the reasoning models,
+  // and clients targeting those send it instead. It is accepted here and
+  // treated as a system message wherever the distinction matters.
+  role: "system" | "developer" | "user" | "assistant" | "tool";
   /**
    * null on an assistant message that carries only tool_calls — the standard
    * shape of every multi-turn tool conversation.

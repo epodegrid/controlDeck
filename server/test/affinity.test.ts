@@ -68,6 +68,23 @@ describe("prefix-cache affinity", () => {
       expect(affinityKeyFor(caller, MODEL, turn(40))).toBe(first);
     });
 
+    it("keys on a `developer` prompt as it would on a system one", () => {
+      // Two agent tools with different instructions but the same opening user
+      // message must not share a replica: the KV cache there holds neither
+      // prefix, so the affinity would be a miss dressed up as a hit.
+      const a = affinityKeyFor(caller, MODEL, [
+        { role: "developer", content: "You are opencode." },
+        { role: "user", content: "fix the build" },
+      ] as ChatMessage[]);
+      const b = affinityKeyFor(caller, MODEL, [
+        { role: "developer", content: "You are a docs writer." },
+        { role: "user", content: "fix the build" },
+      ] as ChatMessage[]);
+
+      expect(a).not.toBeNull();
+      expect(a).not.toBe(b);
+    });
+
     it("differs between conversations and between callers", () => {
       const a = affinityKeyFor(caller, MODEL, turn(0));
       const other = affinityKeyFor(caller, MODEL, [{ role: "user", content: "something else" }]);
