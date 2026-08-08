@@ -2,8 +2,8 @@ apiVersion: v2
 name: controldeck
 description: Self-hosted, OpenAI-API-compatible LLM gateway with Entra ID auth, cost tracking, audit logging, and dynamic autoscaling.
 type: application
-version: 0.4.0
-appVersion: "0.4.0"
+version: 0.4.1
+appVersion: "0.4.1"
 home: https://github.com/epodegrid/controlDeck
 
 # KEDA is vendored rather than referenced, so `helm install` needs no chart
