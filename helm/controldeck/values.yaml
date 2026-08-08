@@ -4,6 +4,11 @@
 # layer in Postgres and merged at read time — they are never clobbered by a
 # Helm upgrade, but Helm always wins on a genuine field conflict (see PRD §6.2, §11).
 
+# Applied to every pod this chart creates. Required when images come from a
+# private internal registry, which is the normal case in an air-gapped install.
+imagePullSecrets: []
+#  - name: internal-registry
+
 router:
   image:
     repository: ghcr.io/epodegrid/controldeck-router

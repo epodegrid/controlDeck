@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Found while matching the example values to the real `epodegrid/model-containers`
+images, and verified against a live llama-swap.
+
+### Fixed
+
+- **A thinking model's reasoning was dropped entirely.** llama.cpp carries it
+  as `reasoning_content`, not `content`, and the adapter read only the latter —
+  so a variant like `ornith:thinking-coding` streamed nothing to the caller for
+  the whole of its thinking phase, and the reasoning was absent from the audit
+  trail and uncounted for cost. It is now forwarded as `reasoning_content` on
+  the delta (and on the non-streaming message), counted as generated tokens,
+  and logged under the same §6.8 scopes as the answer.
+- **llama-swap's loading banner would have been streamed as model output.**
+  With `sendLoadingState: true` — set in every model config in that fleet — it
+  emits a progress banner as `reasoning_content` deltas while it loads weights.
+  Those frames carry no `id`, `object` or `model`, because no model produced
+  them; they are now suppressed, so the banner is never billed as tokens or
+  recorded as content. A real 25-second cold load went from 105 raw frames to
+  8 clean ones with no leakage.
+
+### Added
+
+- **`imagePullSecrets`**, applied to every pod the chart creates. An air-gapped
+  install pulls from an internal mirror, which normally needs credentials.
+
 ## 0.3.0
 
 Compatibility with real llama-swap model containers. Verified against a live

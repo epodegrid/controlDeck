@@ -1,57 +1,92 @@
-# Example values for the epodegrid/model-containers fleet.
+# controlDeck for the epodegrid/model-containers fleet.
 #
 #   helm install controldeck ./helm/controldeck \
 #     -f helm/controldeck/examples/values-model-containers.yaml \
-#     --set postgresql.auth.password=...
+#     --set postgresql.auth.password=... \
+#     --set router.env.ENTRA_JWKS_URI=... \
+#     --set router.env.ENTRA_ISSUER=... \
+#     --set router.env.ENTRA_AUDIENCE=api://llm-gateway
 #
-# Those images bundle llama-swap in front of ik_llama.cpp's llama-server, with
-# the weights and a config.yaml baked in. Three things follow from that shape,
-# and each maps to a field below.
+# Every model name, port and timeout below is taken from that repo's own
+# config.yaml files and Dockerfiles, not guessed. Check them against the images
+# you actually deploy — see "Verifying" at the bottom.
 #
-# 1. llama-swap chooses which process to proxy to from the request's `model`
-#    field — that is its whole routing mechanism. `upstreamModel` is the name
-#    (or alias) the container answers to. It is deliberately separate from the
-#    gateway's `id`, so the platform can expose one clean model name while
-#    pointing at a specific variant alias underneath.
+# ---------------------------------------------------------------------------
+# What the images are
+# ---------------------------------------------------------------------------
 #
-# 2. Weights load on demand, on the first request naming a model, and the
-#    connection is held open while they do — minutes for a 35B GGUF.
-#    `firstTokenTimeoutMs` is the allowance for that. It is a separate clock
-#    from the 60s stall timeout, which only applies once tokens are flowing
-#    (PRD §6.5).
+#   eve:zen4 / eve:zen5      llama-swap → ik_llama.cpp llama-server, port 8080
+#                            serves the model named `ornith`
+#   wall-e:zen4 / :zen5      same shape, serves the model named `wall-e`
+#   go-4:latest              FastAPI (not llama-swap), port 8000, embeddings
 #
-# 3. `/health` on llama-swap reports the proxy, not the model, so it returns
-#    200 while weights are still loading. The chart's readiness probe therefore
-#    gates on the proxy being up, and the wait for weights is absorbed by
-#    firstTokenTimeoutMs above rather than by readiness.
+# The image name is not the model name. The `eve` image serves a model called
+# `ornith` — that is what goes in `upstreamModel`, because llama-swap picks
+# which process to proxy to entirely from the request's `model` field.
 #
-# The images are built per micro-architecture (zen4 / zen5). Pick the tag that
-# matches the node pool and pin it with nodeSelector — a mismatched build dies
-# with an illegal instruction at start-up, not with a graceful error.
+# zen4 and zen5 are separate builds of llama-server for different AMD
+# micro-architectures. Running a zen5 build on a zen4 node dies with an illegal
+# instruction at start-up, so pin each with nodeSelector to a matching pool.
+#
+# ---------------------------------------------------------------------------
+# Air-gapped notes
+# ---------------------------------------------------------------------------
+#
+#   * Weights are baked into the images as layers, so nothing is fetched at
+#     run time. `weightsUrl` is deliberately unset — leave it that way.
+#   * Set imagePullSecrets below and mirror ghcr.io/epodegrid/* plus the
+#     controlDeck images into the internal registry, adjusting the repository
+#     paths to match.
+#   * The chart pulls no external Helm repositories: Postgres is a StatefulSet
+#     on the official image, not a subchart.
+#   * The images are large (a 35B Q4_K_M is tens of GB across several layers).
+#     Pre-pull them onto the node pools, or the first scale-up waits on the
+#     pull as well as on the model load.
+
+imagePullSecrets: []
+#  - name: internal-registry
 
 mockModels:
   enabled: false
 
+router:
+  env:
+    # Both clocks matter for this fleet. The stall timeout only applies once
+    # tokens are flowing; the wait for weights is per-model, below.
+    STALL_TIMEOUT_MS: "60000"
+    QUEUE_TIMEOUT_MS: "300000"
+
 models:
-  - id: eve
+  # ---------------------------------------------------------------------
+  # Ornith-1.0 35B — the `eve` image
+  # ---------------------------------------------------------------------
+  - id: ornith
     name: "Ornith-1.0 35B"
     modelClass: large
+    # No --mmproj in the image's llama-server command, so it is text-only
+    # despite the base model's capabilities. Advertising vision here would
+    # route image requests to a model that cannot serve them.
     capabilities: [chat, tools]
-    # An alias from the container's config.yaml. Change this to switch the
-    # served variant without changing the model name callers use.
-    upstreamModel: eve
+    upstreamModel: ornith
     port: 8080
-    firstTokenTimeoutMs: 1800000 # matches the image's healthCheckTimeout: 1800
+    # The image's config.yaml sets healthCheckTimeout: 1800 for a reason: a
+    # 35B Q4_K_M spread over five shards takes minutes to load, and llama-swap
+    # loads it on the first request that names it. Match that here, or the
+    # request that triggers the load is failed while the load is still working.
+    firstTokenTimeoutMs: 1800000
     minReplicas: 1
     maxReplicas: 4
     costBasis: per_1k_tokens
     costValue: 0.0042
     systemPrompt: ""
     nodeSelector:
-      # Must match the image tag's micro-architecture.
+      # Must match the image tag. Replace with your pool's actual labels.
       kubernetes.io/arch: amd64
-      node.kubernetes.io/instance-type: Standard_D32as_v5
+      controldeck.io/cpu-arch: zen4
     keda:
+      # llama-server runs with --parallel 1, so a replica serves exactly one
+      # request at a time. Any higher number here provisions less capacity
+      # than the fleet actually needs.
       requestsPerReplica: 1
       pollingIntervalSeconds: 15
       cooldownSeconds: 600
@@ -59,45 +94,48 @@ models:
       scaleUpPeriodSeconds: 60
       scaleDownPods: 1
       scaleDownPeriodSeconds: 120
-      # Long, because evicting a replica throws away a loaded 35B model and the
-      # next request pays the full load again.
+      # Long: evicting a replica discards a loaded 35B model, and the next
+      # request pays the full multi-minute load again.
       scaleDownStabilizationSeconds: 900
-    # Generation in flight when a scale-down lands must be allowed to finish.
+    # A generation in flight when a scale-down lands must be allowed to finish.
     drainSeconds: 600
     llamaSwap:
       image: ghcr.io/epodegrid/eve:zen4
-      # No modelPath: the image ships its own config.yaml with weights baked in.
+      # No modelPath: the image ships its own config.yaml with the weights
+      # baked in and the paths already correct.
       resources:
-        requests: { cpu: "8", memory: 48Gi }
-        limits: { cpu: "16", memory: 64Gi }
+        # Sizing guide, not a recommendation — measure yours. The weights are
+        # roughly 21Gi, and --ctx-size 262144 makes the KV cache the larger
+        # term. Start generous and tighten with observed usage.
+        requests: { cpu: "8", memory: 64Gi }
+        limits: { cpu: "16", memory: 96Gi }
 
-  # One image, several names. The eve container's config.yaml gives its model
-  # aliases, and each is a distinct thing to offer callers — same weights, but
-  # a different default prompt and a different cost story. Declaring it with
-  # `backendRef` gives it its own registry entry and no workload of its own:
-  # no second Deployment, no second ScaledObject, no second copy of a 35B model
-  # resident. Requests under either name land on the same pods, share their
-  # in-flight accounting, and are scaled by one HPA reading their combined
-  # queue.
+  # The same container under a second name. `backendRef` means no second
+  # Deployment, no second Service, no second copy of a 35B model resident —
+  # requests under either name land on the same pods and are scaled by one HPA
+  # reading their combined queue.
   #
-  # Check the names against the image before deploying — `upstreamModel` has to
-  # be one the container answers to. The router verifies this against the
-  # backend's /v1/models on every reconcile and reports a mismatch on the
-  # Models page, but catching it here is cheaper.
+  # `ornith:thinking-coding` is a setParamsByID filter in the image's config,
+  # which raises presence_penalty and fixes temperature for coding work. With
+  # includeAliasesInList: true it appears in /v1/models like any other name, so
+  # the router's verification recognises it.
   - id: ornith-thinking
     name: "Ornith-1.0 35B (thinking)"
     modelClass: large
     capabilities: [chat, tools]
-    backendRef: eve
-    upstreamModel: "eve:thinking-coding"
+    backendRef: ornith
+    upstreamModel: "ornith:thinking-coding"
     costBasis: per_1k_tokens
     costValue: 0.0042
-    systemPrompt: "Think step by step before answering."
+    systemPrompt: ""
 
+  # ---------------------------------------------------------------------
+  # Gemma 4 12B — the `wall-e` image
+  # ---------------------------------------------------------------------
   - id: wall-e
     name: "Gemma 4 12B"
     modelClass: fast
-    capabilities: [chat, tools, vision]
+    capabilities: [chat, tools]
     upstreamModel: wall-e
     port: 8080
     firstTokenTimeoutMs: 900000
@@ -108,8 +146,9 @@ models:
     systemPrompt: ""
     nodeSelector:
       kubernetes.io/arch: amd64
+      controldeck.io/cpu-arch: zen4
     keda:
-      requestsPerReplica: 2
+      requestsPerReplica: 1 # --parallel 1 here too
       pollingIntervalSeconds: 15
       cooldownSeconds: 300
       scaleUpPods: 1
@@ -121,25 +160,40 @@ models:
     llamaSwap:
       image: ghcr.io/epodegrid/wall-e:zen4
       resources:
-        requests: { cpu: "4", memory: 20Gi }
-        limits: { cpu: "8", memory: 28Gi }
+        # ~8Gi of weights, --ctx-size 131072.
+        requests: { cpu: "4", memory: 24Gi }
+        limits: { cpu: "8", memory: 40Gi }
 
+  # ---------------------------------------------------------------------
+  # Embeddings — the `go-4` image
+  # ---------------------------------------------------------------------
+  #
+  # Not llama-swap: a FastAPI service exposing only /health and /v1/embeddings,
+  # on port 8000. Two things follow.
+  #
+  # It has no /v1/models, so the router reports this model's upstream name as
+  # "unverifiable" rather than "ok" on the Models page. That is expected here
+  # and is not a fault — the service ignores the `model` field and serves its
+  # one pair of models regardless.
+  #
+  # It also loads both models at import time and only then binds the port, so
+  # readiness genuinely gates on the model being ready — unlike llama-swap.
   - id: go-4
-    name: "Nomic Embed"
+    name: "Nomic Embed (text + vision)"
     modelClass: embedding
     capabilities: [embeddings]
-    # Not a llama-swap container — a FastAPI service on a different port, which
-    # is exactly why the port is per-model rather than a constant.
-    upstreamModel: nomic-embed-text-v2
+    upstreamModel: nomic-embed-vision-v1.5
     port: 8000
-    # Embedding models load fast and hold no KV cache worth waiting on.
-    firstTokenTimeoutMs: 300000
+    # Short: readiness already covers the load, so a request that waits this
+    # long is genuinely stuck rather than starting up.
+    firstTokenTimeoutMs: 120000
     minReplicas: 1
     maxReplicas: 3
     costBasis: per_compute_second
     costValue: 0.0003
     systemPrompt: ""
     keda:
+      # No --parallel constraint; a batch of embeddings is short work.
       requestsPerReplica: 4
       pollingIntervalSeconds: 15
       cooldownSeconds: 300
@@ -154,3 +208,29 @@ models:
       resources:
         requests: { cpu: "2", memory: 8Gi }
         limits: { cpu: "4", memory: 12Gi }
+
+# ---------------------------------------------------------------------------
+# Verifying
+# ---------------------------------------------------------------------------
+#
+# The names a container answers to live in its own config.yaml, so an image
+# rebuild can rename one while the deployment stays green and every request to
+# it fails. The router checks each `upstreamModel` against the backend's
+# /v1/models on every reconcile and flags a mismatch on the Models page, naming
+# what the container does serve. To check by hand:
+#
+#   kubectl exec -n <ns> deploy/ornith-replica -- \
+#     wget -qO- localhost:8080/v1/models
+#
+# At the time of writing that returns, for the eve image:
+#
+#   ornith, Ornith-1.0-35B, deepreinforce-ai/Ornith-1.0-35B,
+#   ornith:instruct, ornith:thinking-coding
+#
+# and for wall-e:
+#
+#   wall-e, gemma-4-12b, google/gemma-4-12b-it-qat-q4_0,
+#   wall-e:coding, wall-e:instruct
+#
+# Any of those is valid in `upstreamModel`. Add a `backendRef` entry per name
+# you want to offer callers as a distinct model.

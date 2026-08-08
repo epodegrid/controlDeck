@@ -26,6 +26,12 @@ spec:
       labels:
         controldeck.io/model-id: {{ .id }}
     spec:
+      {{- with $.Values.imagePullSecrets }}
+      # An air-gapped cluster pulls from an internal mirror, which normally
+      # requires credentials.
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       # A replica that is scaled down must be allowed to finish what it is
       # already generating (§6.5: requests making progress are never cut off).
       # The preStop sleep holds the container open long enough for the router's

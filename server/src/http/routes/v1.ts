@@ -178,6 +178,7 @@ export function registerV1Routes(
 
       let outputTokens = 0;
       let fullText = "";
+      let fullReasoning = "";
 
       // The spec opens a stream with the assistant role, which is how a client
       // knows which message the deltas belong to.
@@ -199,15 +200,27 @@ export function registerV1Routes(
           ...sampling,
         })) {
           if (chunk.done) break;
+          // Reasoning tokens are generated tokens: they cost compute, they
+          // keep the stall clock alive, and OpenAI bills them. Counting only
+          // the answer would understate a thinking model's real cost.
           outputTokens += 1;
-          fullText += chunk.token;
+          if (chunk.reasoning) fullReasoning += chunk.reasoning;
+          else fullText += chunk.token;
           await recordTokenEmitted(requestId);
           const sse = {
             id: requestId,
             object: "chat.completion.chunk",
             created,
             model: model.id,
-            choices: [{ index: 0, delta: { content: chunk.token }, finish_reason: null }],
+            choices: [
+              {
+                index: 0,
+                delta: chunk.reasoning
+                  ? { reasoning_content: chunk.reasoning }
+                  : { content: chunk.token },
+                finish_reason: null,
+              },
+            ],
           };
           reply.raw.write(`data: ${JSON.stringify(sse)}\n\n`);
         }
@@ -230,7 +243,11 @@ export function registerV1Routes(
         await completeRequest(requestId, { outputTokens, costUsd });
 
         if (await isContentLoggingEnabled({ team: identity.team, modelId: model.id })) {
-          await recordAuditContent(requestId, promptText, fullText);
+          await recordAuditContent(
+            requestId,
+            promptText,
+            fullReasoning ? `${fullReasoning}\n\n${fullText}` : fullText
+          );
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : "Stream failed unexpectedly.";
@@ -246,6 +263,7 @@ export function registerV1Routes(
     // non-streaming
     let outputTokens = 0;
     let fullText = "";
+    let fullReasoning = "";
     try {
       for await (const chunk of deps.llamaSwap.streamChat({
         endpointUrl: targetUrl,
@@ -255,7 +273,8 @@ export function registerV1Routes(
       })) {
         if (chunk.done) break;
         outputTokens += 1;
-        fullText += chunk.token;
+        if (chunk.reasoning) fullReasoning += chunk.reasoning;
+        else fullText += chunk.token;
         await recordTokenEmitted(requestId);
       }
     } catch (err) {
@@ -274,7 +293,13 @@ export function registerV1Routes(
     await completeRequest(requestId, { outputTokens, costUsd });
 
     if (await isContentLoggingEnabled({ team: identity.team, modelId: model.id })) {
-      await recordAuditContent(requestId, promptText, fullText);
+      await recordAuditContent(
+        requestId,
+        promptText,
+        // Reasoning is model output under §6.8 too — it can restate the prompt
+        // and is exactly what a content-logging scope exists to capture.
+        fullReasoning ? `${fullReasoning}\n\n${fullText}` : fullText
+      );
     }
 
     return {
@@ -282,7 +307,19 @@ export function registerV1Routes(
       object: "chat.completion",
       created,
       model: model.id,
-      choices: [{ index: 0, message: { role: "assistant", content: fullText }, finish_reason: "stop" }],
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: fullText,
+            // Only present when the model actually produced reasoning, so an
+            // ordinary model's response shape is unchanged.
+            ...(fullReasoning ? { reasoning_content: fullReasoning } : {}),
+          },
+          finish_reason: "stop",
+        },
+      ],
       usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens },
     };
   });

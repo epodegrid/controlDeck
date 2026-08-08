@@ -15,6 +15,12 @@ spec:
       labels:
         app.kubernetes.io/component: dashboard
     spec:
+      {{- with $.Values.imagePullSecrets }}
+      # An air-gapped cluster pulls from an internal mirror, which normally
+      # requires credentials.
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: dashboard
           image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag | default .Chart.AppVersion }}"

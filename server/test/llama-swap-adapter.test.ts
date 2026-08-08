@@ -41,6 +41,7 @@ afterAll(async () => {
 
 function sseModelResponse(res: any, text: string) {
   res.writeHead(200, { "content-type": "text/event-stream" });
+  // No id, matching the sparser servers in the wild — content must still pass.
   res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
   res.write("data: [DONE]\n\n");
   res.end();
@@ -132,6 +133,78 @@ describe("HttpLlamaSwapClient wire format", () => {
     expect(body.max_tokens).toBe(128);
     expect(body.stop).toEqual(["</s>"]);
     expect(body.seed).toBe(7);
+  });
+
+  it("forwards a thinking model's reasoning as reasoning, not as the answer", async () => {
+    respond = (_p, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      // Frame shapes copied from a real llama-server stream.
+      const frame = (delta: unknown) =>
+        `data: ${JSON.stringify({
+          id: "chatcmpl-abc",
+          object: "chat.completion.chunk",
+          model: "/models/x.gguf",
+          choices: [{ index: 0, delta, finish_reason: null }],
+        })}\n\n`;
+      res.write(frame({ reasoning_content: "let me think" }));
+      res.write(frame({ content: "answer" }));
+      res.write("data: [DONE]\n\n");
+      res.end();
+    };
+
+    const client = new HttpLlamaSwapClient();
+    const seen: Array<{ token: string; reasoning?: string }> = [];
+    for await (const t of client.streamChat({
+      endpointUrl: baseUrl,
+      model: "ornith:thinking-coding",
+      messages: [{ role: "user", content: "hi" }],
+    })) {
+      if (!t.done) seen.push({ token: t.token, reasoning: t.reasoning });
+    }
+
+    // Dropping reasoning left a thinking model looking dead to the caller for
+    // the whole of its thinking phase.
+    expect(seen).toEqual([
+      { token: "", reasoning: "let me think" },
+      { token: "answer", reasoning: undefined },
+    ]);
+  });
+
+  it("suppresses llama-swap's loading banner, which is not model output", async () => {
+    respond = (_p, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      // Verbatim shape of what llama-swap emits with sendLoadingState while it
+      // loads a model on demand: reasoning_content deltas with no id, object
+      // or model, because no model has produced them yet.
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "━━━━━" } }] })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "llama-swap loading m" } }] })}\n\n`
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-abc",
+          object: "chat.completion.chunk",
+          model: "/models/x.gguf",
+          choices: [{ index: 0, delta: { content: "real" }, finish_reason: null }],
+        })}\n\n`
+      );
+      res.write("data: [DONE]\n\n");
+      res.end();
+    };
+
+    const client = new HttpLlamaSwapClient();
+    const seen: Array<{ token: string; reasoning?: string }> = [];
+    for await (const t of client.streamChat({
+      endpointUrl: baseUrl,
+      model: "ornith",
+      messages: [{ role: "user", content: "hi" }],
+    })) {
+      if (!t.done) seen.push({ token: t.token, reasoning: t.reasoning });
+    }
+
+    // The banner is a status message from the proxy: it must not reach the
+    // caller as output, be billed as tokens, or land in the audit content log.
+    expect(seen).toEqual([{ token: "real", reasoning: undefined }]);
   });
 
   it("leaves a caller-supplied system message authoritative (PRD §6.11)", async () => {

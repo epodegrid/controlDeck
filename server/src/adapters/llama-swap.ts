@@ -1,4 +1,13 @@
-export type ChatToken = { token: string; done: boolean };
+export type ChatToken = {
+  token: string;
+  done: boolean;
+  /**
+   * A thinking model's visible reasoning, carried by llama.cpp as
+   * `reasoning_content` rather than `content`. Forwarded separately so the
+   * caller can render or hide it, and so it is never mistaken for the answer.
+   */
+  reasoning?: string;
+};
 
 /**
  * Everything the gateway passes through to the model server. The sampling
@@ -109,8 +118,32 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
         }
         try {
           const parsed = JSON.parse(data);
-          const token = parsed.choices?.[0]?.delta?.content ?? "";
+          const delta = parsed.choices?.[0]?.delta;
+
+          const token = delta?.content ?? "";
+          const reasoning = delta?.reasoning_content ?? "";
+
+          // llama-swap's own progress banner, emitted while it loads a model
+          // on demand when sendLoadingState is set. It arrives as
+          // reasoning_content deltas indistinguishable from a thinking model's
+          // output except for what is *missing*: no id, object or model,
+          // because no model has produced them.
+          //
+          // It must not reach the caller as output, be counted as generated
+          // tokens, or land in the audit content log — it is a status message
+          // from the proxy.
+          //
+          // Scoped to reasoning-only frames on purpose. Requiring an id of
+          // every frame would silently discard the entire response from any
+          // backend that omits one, which is a far worse failure than letting
+          // a progress banner through.
+          const fromModel = typeof parsed.id === "string" && parsed.id.length > 0;
+          if (reasoning && !token && !fromModel) continue;
+          // Reasoning is progress too. Dropping it left a thinking model
+          // looking dead to the caller for the whole of its thinking phase,
+          // and starved the stall clock of the evidence that it was working.
           if (token) yield { token, done: false };
+          else if (reasoning) yield { token: "", done: false, reasoning };
         } catch {
           // ignore malformed keep-alive lines
         }
