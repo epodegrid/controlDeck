@@ -1,4 +1,5 @@
 import { getPool } from "../db/pool.js";
+import { createRedactor } from "./redact.js";
 
 /**
  * Where a replica's stdout comes from (PRD §6.10).
@@ -50,11 +51,20 @@ export function parseLine(raw: string, source: string): LogLine | null {
   // Honour a leading level marker if the container emits one, otherwise infer
   // from the text — an operator scanning for red should find it.
   let level: LogLine["level"] = "info";
-  const marked = /^\[(info|warn|warning|error|debug)\]\s*(.*)$/i.exec(message);
-  if (marked) {
-    const m = marked[1].toLowerCase();
+  // Two shapes in practice: `[info] ...` from the mock model, and
+  // `INFO [ func] ...` from llama.cpp / ik_llama.cpp. Reading the level the
+  // server actually declared beats inferring it from words in the text, which
+  // mislabels a line like "0 errors" as an error.
+  const bracketed = /^\[(info|warn|warning|error|debug)\]\s*(.*)$/i.exec(message);
+  const prefixed = /^(INFO|WARN|WARNING|ERROR|DEBUG)\s+(.*)$/.exec(message);
+  if (bracketed) {
+    const m = bracketed[1].toLowerCase();
     level = m === "warning" ? "warn" : (m as LogLine["level"]);
-    message = marked[2];
+    message = bracketed[2];
+  } else if (prefixed) {
+    const m = prefixed[1].toLowerCase();
+    level = m === "warning" ? "warn" : (m as LogLine["level"]);
+    message = prefixed[2];
   } else if (/\b(error|fatal|panic|failed|exception)\b/i.test(message)) {
     level = "error";
   } else if (/\b(warn|warning|retry|degraded)\b/i.test(message)) {
@@ -184,10 +194,17 @@ export async function tailReplicaLogs(
   }
 
   const controller = new AbortController();
+
+  // Model servers print the prompt itself at higher verbosity. The log panel
+  // is not the audit trail and has none of its scoping, so content is masked
+  // on the way through — see logs/redact.ts.
+  const redact = createRedactor();
+  const emit = (line: LogLine) => onLine({ ...line, message: redact(line.message) });
+
   const done =
     kind === "kubernetes"
-      ? tailFromKubernetes(replicaId, tail, onLine, controller.signal)
-      : tailFromEndpoint(rows[0].endpoint_url, replicaId, tail, onLine, controller.signal);
+      ? tailFromKubernetes(replicaId, tail, emit, controller.signal)
+      : tailFromEndpoint(rows[0].endpoint_url, replicaId, tail, emit, controller.signal);
 
   return {
     done: done.catch((err) => {

@@ -161,6 +161,7 @@ All shared state lives in Postgres, which is what lets the router run multiple r
 | `MODEL_ENDPOINT_<MODEL_ID>` | — | Base address for a model, e.g. `MODEL_ENDPOINT_ORNITH_35B` |
 | `MODEL_REPLICAS_<MODEL_ID>` | — | Comma-separated per-replica addresses; takes precedence |
 | `LOG_SOURCE` | auto | `kubernetes`, `endpoint`, or `none`. Auto-detects in-cluster |
+| `LOG_REDACT_PROMPTS` | `true` | Mask prompt/completion text in the log stream |
 | `THROUGHPUT_FRESH_MS` | `120000` | How long a replica's measured tokens/sec is trusted |
 | `TOKENS_PER_SEC_ALPHA` | `0.3` | Weight of the newest throughput sample |
 | `QUEUE_TIMEOUT_MS` | `300000` | Queue-wait clock (§6.5) |
@@ -388,9 +389,20 @@ with no failures.
 - `endpoint` — the replica's own `/logs` stream, used in local development
   where there is no Kubernetes to ask.
 
-When neither is available the panel says so and closes the stream. It never
-substitutes generated lines: an operator triaging a crash-looping replica has
-to be able to trust that what they read is what the replica said.
+These are the container's own stdout — the same lines `kubectl logs -f` would
+show: slot state, token timings, HTTP status, load errors. When neither source
+is available the panel says so and closes the stream. It never substitutes
+generated lines: an operator triaging a crash-looping replica has to be able to
+trust that what they read is what the replica said.
+
+**Prompt content is masked.** ik_llama.cpp and llama.cpp print the prompt
+itself at higher verbosity — chat-template markers, tool-call JSON, whatever
+the caller sent. The log panel has none of the Audit view's per-scope controls,
+so content arriving through it would defeat §6.8 entirely: an admin who turned
+content logging *off* for a team would still read their prompts here. Lines
+carrying prompt or completion text are replaced with a visible marker;
+operational lines are untouched. Set `LOG_REDACT_PROMPTS=false` to disable,
+deliberately.
 
 **Throughput-aware placement.** Every completed request contributes its
 observed tokens/sec to a moving average per replica. Placement keeps
