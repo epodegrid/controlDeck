@@ -66,6 +66,11 @@ export function registerV1Routes(
       data: models.map((m) => ({
         id: m.id,
         object: "model",
+        // Required by the OpenAI schema. Clients that validate the listing
+        // reject entries without them, so a strict client could not even
+        // enumerate the gateway's models.
+        created: Math.floor(Date.now() / 1000),
+        owned_by: "controldeck",
         capabilities: m.capabilities,
         model_class: m.modelClass,
       })),
@@ -110,21 +115,55 @@ export function registerV1Routes(
     // only for registries predating per-replica endpoints.
     const targetUrl = placement.endpointUrl || model.endpointUrl;
     const startedAt = Date.now();
+    // `created` is required by the OpenAI schema; clients that model responses
+    // strictly reject a payload without it.
+    const created = Math.floor(startedAt / 1000);
 
-    const promptText = body.messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
+    // Everything the caller asked for beyond the messages themselves. Dropping
+    // these silently produced answers that looked fine and ignored the
+    // caller's temperature, token ceiling and stop sequences.
+    const sampling = {
+      temperature: body.temperature,
+      topP: body.top_p,
+      maxTokens: body.max_tokens,
+      stop: body.stop,
+      seed: body.seed,
+      presencePenalty: body.presence_penalty,
+      frequencyPenalty: body.frequency_penalty,
+      responseFormat: body.response_format,
+      tools: body.tools,
+      toolChoice: body.tool_choice,
+    };
+
+    // content is null on an assistant message that only carries tool_calls.
+    const promptText = body.messages
+      .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content ?? "")))
+      .join("\n");
 
     if (body.stream) {
       writeSseHead(reply);
 
       let outputTokens = 0;
       let fullText = "";
+
+      // The spec opens a stream with the assistant role, which is how a client
+      // knows which message the deltas belong to.
+      reply.raw.write(
+        `data: ${JSON.stringify({
+          id: requestId,
+          object: "chat.completion.chunk",
+          created,
+          model: model.id,
+          choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+        })}\n\n`
+      );
+
       try {
         for await (const chunk of deps.llamaSwap.streamChat({
           endpointUrl: targetUrl,
           messages: body.messages,
           systemPrompt: model.systemPrompt,
-          tools: body.tools,
-          toolChoice: body.tool_choice,
+          ...sampling,
         })) {
           if (chunk.done) break;
           outputTokens += 1;
@@ -133,12 +172,21 @@ export function registerV1Routes(
           const sse = {
             id: requestId,
             object: "chat.completion.chunk",
+            created,
             model: model.id,
             choices: [{ index: 0, delta: { content: chunk.token }, finish_reason: null }],
           };
           reply.raw.write(`data: ${JSON.stringify(sse)}\n\n`);
         }
-        reply.raw.write(`data: ${JSON.stringify({ id: requestId, object: "chat.completion.chunk", model: model.id, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`);
+        reply.raw.write(
+          `data: ${JSON.stringify({
+            id: requestId,
+            object: "chat.completion.chunk",
+            created,
+            model: model.id,
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          })}\n\n`
+        );
         reply.raw.write("data: [DONE]\n\n");
 
         const costConfig = (await getCostConfigForModel(model.id)) ?? { costValue: model.costValue, costBasis: model.costBasis };
@@ -170,8 +218,7 @@ export function registerV1Routes(
         endpointUrl: targetUrl,
         messages: body.messages,
         systemPrompt: model.systemPrompt,
-        tools: body.tools,
-        toolChoice: body.tool_choice,
+        ...sampling,
       })) {
         if (chunk.done) break;
         outputTokens += 1;
@@ -200,6 +247,7 @@ export function registerV1Routes(
     return {
       id: requestId,
       object: "chat.completion",
+      created,
       model: model.id,
       choices: [{ index: 0, message: { role: "assistant", content: fullText }, finish_reason: "stop" }],
       usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens },

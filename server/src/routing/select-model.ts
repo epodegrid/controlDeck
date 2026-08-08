@@ -45,11 +45,17 @@ function selectExplicit(
   const named = candidates.find((model) => model.id === modelId);
 
   if (!named) {
+    // Distinct from a capability mismatch: the caller named something that does
+    // not exist, which is a different fix from "this model cannot do that".
     return {
       ok: false,
-      error: capabilityMismatchError(
-        `Requested model "${modelId}" is not a known/eligible model.`
-      ),
+      error: {
+        error: {
+          type: "invalid_request_error",
+          code: "model_not_found",
+          message: `Requested model "${modelId}" is not a known/eligible model.`,
+        },
+      },
     };
   }
 

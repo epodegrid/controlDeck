@@ -4,6 +4,10 @@ export function statusForError(err: StandardError): number {
   switch (err.error.code) {
     case "auth_invalid":
       return 401;
+    case "model_not_found":
+      // What OpenAI returns for an unknown model, and what clients branch on
+      // to tell a typo in the model name from a request they must change.
+      return 404;
     case "capability_mismatch":
       return 422;
     case "invalid_request":

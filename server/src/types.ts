@@ -16,6 +16,7 @@ export type RequestStatus =
   | "error";
 
 export type ErrorCode =
+  | "model_not_found"
   | "queue_timeout"
   | "stall_timeout"
   | "replica_unavailable"
@@ -60,15 +61,35 @@ export type ModelConfig = {
 
 export type ChatMessage = {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | Array<{ type: string; [key: string]: unknown }>;
+  /**
+   * null on an assistant message that carries only tool_calls — the standard
+   * shape of every multi-turn tool conversation.
+   */
+  content: string | Array<{ type: string; [key: string]: unknown }> | null;
+  tool_calls?: unknown[];
+  tool_call_id?: string;
+  name?: string;
 };
 
+/**
+ * The OpenAI chat-completion request. Everything beyond `messages` is
+ * forwarded to the backend rather than dropped: a caller who sets temperature
+ * for reproducibility, or max_tokens to bound cost, has to actually get it.
+ */
 export type ChatCompletionRequest = {
   model?: string;
   messages: ChatMessage[];
   tools?: unknown[];
   tool_choice?: unknown;
   stream?: boolean;
+  temperature?: number;
+  top_p?: number;
+  max_tokens?: number;
+  stop?: string | string[];
+  seed?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+  response_format?: unknown;
 };
 
 export type CallerIdentity = {

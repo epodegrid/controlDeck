@@ -1,15 +1,30 @@
 export type ChatToken = { token: string; done: boolean };
 
+/**
+ * Everything the gateway passes through to the model server. The sampling
+ * fields are the caller's, forwarded verbatim — the gateway has no opinion on
+ * them and must not silently substitute its own.
+ */
+export type StreamChatParams = {
+  endpointUrl: string;
+  messages: Array<{ role: string; content: unknown }>;
+  systemPrompt?: string;
+  /** Forwarded verbatim; llama-swap owns the tool-calling handling (§6.12). */
+  tools?: unknown[];
+  toolChoice?: unknown;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  stop?: string | string[];
+  seed?: number;
+  presencePenalty?: number;
+  frequencyPenalty?: number;
+  responseFormat?: unknown;
+};
+
 export interface LlamaSwapClient {
   checkReady(endpointUrl: string): Promise<boolean>;
-  streamChat(params: {
-    endpointUrl: string;
-    messages: Array<{ role: string; content: unknown }>;
-    systemPrompt?: string;
-    /** Forwarded verbatim; llama-swap owns the tool-calling handling (§6.12). */
-    tools?: unknown[];
-    toolChoice?: unknown;
-  }): AsyncGenerator<ChatToken>;
+  streamChat(params: StreamChatParams): AsyncGenerator<ChatToken>;
   embed(params: { endpointUrl: string; input: string | string[] }): Promise<number[][]>;
 }
 
@@ -28,13 +43,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     }
   }
 
-  async *streamChat(params: {
-    endpointUrl: string;
-    messages: Array<{ role: string; content: unknown }>;
-    systemPrompt?: string;
-    tools?: unknown[];
-    toolChoice?: unknown;
-  }): AsyncGenerator<ChatToken> {
+  async *streamChat(params: StreamChatParams): AsyncGenerator<ChatToken> {
     // PRD §6.11 — the per-model system prompt is a *default*, not an override.
     // If the caller sent their own system message we leave it authoritative
     // and inject nothing.
@@ -57,6 +66,14 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
         // caller gets a plain answer and no indication why.
         ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
         ...(params.toolChoice !== undefined ? { tool_choice: params.toolChoice } : {}),
+        ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+        ...(params.topP !== undefined ? { top_p: params.topP } : {}),
+        ...(params.maxTokens !== undefined ? { max_tokens: params.maxTokens } : {}),
+        ...(params.stop !== undefined ? { stop: params.stop } : {}),
+        ...(params.seed !== undefined ? { seed: params.seed } : {}),
+        ...(params.presencePenalty !== undefined ? { presence_penalty: params.presencePenalty } : {}),
+        ...(params.frequencyPenalty !== undefined ? { frequency_penalty: params.frequencyPenalty } : {}),
+        ...(params.responseFormat !== undefined ? { response_format: params.responseFormat } : {}),
       }),
     });
     if (!res.ok) {
@@ -112,9 +129,7 @@ export class FakeLlamaSwapClient implements LlamaSwapClient {
     return true;
   }
 
-  async *streamChat(params: {
-    messages: Array<{ role: string; content: unknown }>;
-  }): AsyncGenerator<ChatToken> {
+  async *streamChat(params: StreamChatParams): AsyncGenerator<ChatToken> {
     const lastUser = [...params.messages].reverse().find((m) => m.role === "user");
     const prompt = typeof lastUser?.content === "string" ? lastUser.content : "your request";
     const reply = `This is a simulated response from the fake llama-swap adapter for: "${prompt.slice(0, 80)}". Configure USE_FAKE_ADAPTERS=false and a real llama-swap endpoint to get live model output.`;

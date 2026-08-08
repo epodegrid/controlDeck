@@ -28,7 +28,10 @@ export function requiredCapabilities(request: ChatCompletionRequest, endpoint: E
 
 function requestHasImage(messages: ChatMessage[]): boolean {
   return messages.some((message) => {
-    if (typeof message.content === "string") return false;
+    // content is null on an assistant message that carries only tool_calls —
+    // the standard shape of every multi-turn tool conversation. Treating it as
+    // an array threw, so the second turn of a tool exchange 500'd.
+    if (!Array.isArray(message.content)) return false;
     return message.content.some((part) => isImagePart(part));
   });
 }

@@ -29,6 +29,20 @@ The full product specification lives in [`prd/llm-platform-prd.md`](prd/llm-plat
 | **Audit trail** | Metadata on every request; full prompt/response content when enabled, toggleable globally or per team, model, or key |
 | **Dashboard** | Seven SSO-gated operational views: overview, models, requests, cost, audit, monitoring, settings |
 
+### Client compatibility
+
+Conformance is tested with the **official OpenAI SDK** rather than with curl.
+Testing by hand proves the bytes we meant to send arrived; it does not prove a
+real client can parse them or that the request the caller composed survived the
+trip. Pointing the SDK at the gateway found six things that hand-testing had
+not, including a request shape that crashed the router outright.
+
+Forwarded verbatim to the model server: `tools`, `tool_choice`, `temperature`,
+`top_p`, `max_tokens`, `stop`, `seed`, `presence_penalty`, `frequency_penalty`,
+`response_format`. A caller who sets temperature for reproducibility, or
+`max_tokens` to bound cost, gets it — the gateway has no opinion on sampling
+and must not silently substitute its own.
+
 ### Deliberately not included
 
 No platform-side RBAC or user table. No budget enforcement or rate limiting. No built-in chat UI. No log aggregation backend. No alerting — controlDeck exports metrics and Grafana owns alerting. See §3 of the PRD for the full list and the reasoning.
@@ -217,6 +231,7 @@ Claims here are only made where they have been executed:
 | Pod discovery, pod logs, RBAC | minikube |
 | KEDA scale up *and* down | minikube, 1 → 4 → 1 |
 | GitOps registration, override survival | minikube, fresh install with no seeding |
+| OpenAI API compatibility | the official `openai` SDK, driven against a live gateway |
 | Entra ID | **not verified** — needs a real tenant; see [docs/entra-setup.md](docs/entra-setup.md) |
 
 The model server used for verification is upstream `llama.cpp`, not

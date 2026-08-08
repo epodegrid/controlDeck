@@ -70,6 +70,11 @@ function flattenMessages(messages: ChatMessage[]): string {
   return messages
     .map((message) => {
       if (typeof message.content === "string") return message.content;
+      // An assistant message that only carries tool_calls has content: null —
+      // the standard shape of every multi-turn tool conversation. Calling
+      // .map on it threw, so the second turn of any tool exchange crashed the
+      // router with a 500.
+      if (!Array.isArray(message.content)) return "";
       return message.content
         .map((part) => (typeof part.text === "string" ? part.text : ""))
         .join(" ");

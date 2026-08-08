@@ -97,7 +97,10 @@ describe("selectModel - explicit override", () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.error.code).toBe("capability_mismatch");
+      // Distinct from capability_mismatch on purpose: the model does not
+      // exist, which is a different fix for the caller than "this model
+      // cannot do that". OpenAI clients branch on the 404 this maps to.
+      expect(result.error.error.code).toBe("model_not_found");
     }
   });
 });
