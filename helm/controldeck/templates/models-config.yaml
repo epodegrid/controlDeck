@@ -17,6 +17,10 @@
 #                       platform-level id shown to callers.
 #   port                Used for direct pod-IP discovery, which bypasses the
 #                       Service. Not every backend listens on 8080.
+#   backendRef          Another model whose container serves this one. One
+#                       image commonly answers to several names over the same
+#                       loaded weights; each gets its own entry here, and only
+#                       the referenced one gets a Deployment.
 #   firstTokenTimeoutMs How long a request may wait for its first token while
 #                       weights load on demand — separate from, and far longer
 #                       than, the 60s stall clock (PRD §6.5).
@@ -29,22 +33,36 @@ metadata:
 data:
   models.json: |
     {{- $models := list }}
+    {{- /* Indexed so an alias can resolve the entry that owns its workload:
+           it has no Service, port or replica count of its own to report. */}}
+    {{- $byId := dict }}
     {{- range .Values.models }}
+    {{- $byId = set $byId .id . }}
+    {{- end }}
+    {{- range .Values.models }}
+    {{- $backend := . }}
+    {{- if .backendRef }}
+    {{- $backend = index $byId .backendRef }}
+    {{- if not $backend }}
+    {{- fail (printf "model %q has backendRef %q, which is not a model in values.models" .id .backendRef) }}
+    {{- end }}
+    {{- end }}
     {{- $models = append $models (dict
         "id" .id
         "name" (.name | default .id)
         "classLabel" (.classLabel | default .modelClass)
         "modelClass" .modelClass
         "capabilities" .capabilities
-        "minReplicas" (.minReplicas | default 1)
-        "maxReplicas" (.maxReplicas | default 1)
+        "minReplicas" ($backend.minReplicas | default 1)
+        "maxReplicas" ($backend.maxReplicas | default 1)
         "systemPrompt" (.systemPrompt | default "")
         "costValue" (.costValue | default 0)
         "costBasis" (.costBasis | default "per_1k_tokens")
-        "endpointUrl" (printf "http://%s.%s.svc.cluster.local" .id $.Release.Namespace)
+        "endpointUrl" (printf "http://%s.%s.svc.cluster.local" $backend.id $.Release.Namespace)
         "upstreamModel" (.upstreamModel | default .id)
-        "port" (.port | default 8080)
-        "firstTokenTimeoutMs" (.firstTokenTimeoutMs | default 600000)
+        "port" ($backend.port | default 8080)
+        "firstTokenTimeoutMs" (.firstTokenTimeoutMs | default $backend.firstTokenTimeoutMs | default 600000)
+        "backendRef" (.backendRef | default "")
     ) }}
     {{- end }}
     {{ dict "models" $models | toJson }}

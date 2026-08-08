@@ -53,6 +53,20 @@ export type ModelWithReplicas = {
   configSource: "gitops" | "override";
   hasOverride: boolean;
   replicas: Replica[];
+  /** The name this model's container answers to; llama-swap routes on it. */
+  upstreamModel: string;
+  /** Set when another model's container serves this one. */
+  backendModelId: string;
+  /**
+   * Whether the backend actually serves `upstreamModel`. Null until the
+   * reconciler has reached this model's backend once; "unknown" where the
+   * backend offers no model listing to check against.
+   */
+  upstreamCheck:
+    | { state: "ok" }
+    | { state: "unknown"; detail: string }
+    | { state: "missing"; detail: string; available: string[] }
+    | null;
 };
 
 export type Overview = {

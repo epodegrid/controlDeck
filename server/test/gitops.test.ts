@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { getPool, closePool } from "../src/db/pool.js";
 import { syncModelsFromConfig, readModelsConfig, syncModelsFromConfigFile } from "../src/registry/gitops.js";
 import { listModels, setModelOverride } from "../src/registry/index.js";
+import { seed } from "../src/db/seed.js";
 
 /**
  * PRD §6.2 — Helm/GitOps is the primary model registration path.
@@ -30,6 +31,12 @@ describe("GitOps model registration", () => {
   beforeEach(cleanup);
   afterAll(async () => {
     await cleanup();
+    // syncModelsFromConfig deletes every model absent from the config it is
+    // given — Helm owns which models exist. That is correct in production and
+    // destructive here: it removes the seeded registry other test files run
+    // against, and vitest does not order files alphabetically, so whether they
+    // notice is luck. Put it back.
+    await seed({ force: true });
     await closePool();
   });
 
@@ -42,6 +49,24 @@ describe("GitOps model registration", () => {
     const all = (await listModels()).filter((m) => m.id.startsWith(PREFIX));
     expect(all.map((m) => m.id).sort()).toEqual([`${PREFIX}-a`, `${PREFIX}-b`]);
     expect(all.find((m) => m.id === `${PREFIX}-a`)?.capabilities).toEqual(["chat", "tools"]);
+  });
+
+  it("records which model's workload serves an alias", async () => {
+    await syncModelsFromConfig([
+      model("owner"),
+      model("alias", { backendRef: `${PREFIX}-owner`, upstreamModel: "eve:thinking-coding" }),
+    ]);
+
+    const all = await listModels();
+    const alias = all.find((m) => m.id === `${PREFIX}-alias`)!;
+    expect(alias.backendModelId).toBe(`${PREFIX}-owner`);
+    expect(alias.upstreamModel).toBe("eve:thinking-coding");
+
+    // Dropping the alias must not disturb the model that serves it.
+    await syncModelsFromConfig([model("owner")]);
+    const after = await listModels();
+    expect(after.find((m) => m.id === `${PREFIX}-owner`)).toBeTruthy();
+    expect(after.find((m) => m.id === `${PREFIX}-alias`)).toBeUndefined();
   });
 
   it("carries the backend fields a real model container needs", async () => {

@@ -71,6 +71,12 @@ export async function renderPrometheusMetrics(): Promise<string> {
  * The ScaledObject's targetValue is how many of those a single replica should
  * absorb, so ten pending requests at a target of one produce ten replicas,
  * bounded by maxReplicaCount.
+ *
+ * `modelId` here is a *backend* — the model that owns the Deployment the
+ * ScaledObject targets. Where several registry entries are aliases over one
+ * container, their queues are summed, because they contend for the same pods.
+ * Counting one alias alone would under-provision the workload in proportion to
+ * how much of its traffic arrived under the other names.
  */
 export async function getKedaMetricForModel(
   modelId: string,
@@ -79,10 +85,16 @@ export async function getKedaMetricForModel(
   const pool = getPool();
 
   const { rows } = await pool.query<{ in_flight: string; queued: string }>(
-    `SELECT
+    `WITH served_by AS (
+       -- Every registry entry this backend serves: itself, plus any alias
+       -- pointing at it.
+       SELECT id FROM model_registry
+       WHERE id = $1 OR backend_model_id = $1
+     )
+     SELECT
        (SELECT coalesce(sum(in_flight), 0) FROM replicas WHERE model_id = $1) AS in_flight,
        (SELECT count(*) FROM requests
-         WHERE status = 'queued' AND routed_model = $1) AS queued`,
+         WHERE status = 'queued' AND routed_model IN (SELECT id FROM served_by)) AS queued`,
     [modelId]
   );
 

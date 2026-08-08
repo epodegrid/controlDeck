@@ -71,6 +71,29 @@ models:
         requests: { cpu: "8", memory: 48Gi }
         limits: { cpu: "16", memory: 64Gi }
 
+  # One image, several names. The eve container's config.yaml gives its model
+  # aliases, and each is a distinct thing to offer callers — same weights, but
+  # a different default prompt and a different cost story. Declaring it with
+  # `backendRef` gives it its own registry entry and no workload of its own:
+  # no second Deployment, no second ScaledObject, no second copy of a 35B model
+  # resident. Requests under either name land on the same pods, share their
+  # in-flight accounting, and are scaled by one HPA reading their combined
+  # queue.
+  #
+  # Check the names against the image before deploying — `upstreamModel` has to
+  # be one the container answers to. The router verifies this against the
+  # backend's /v1/models on every reconcile and reports a mismatch on the
+  # Models page, but catching it here is cheaper.
+  - id: ornith-thinking
+    name: "Ornith-1.0 35B (thinking)"
+    modelClass: large
+    capabilities: [chat, tools]
+    backendRef: eve
+    upstreamModel: "eve:thinking-coding"
+    costBasis: per_1k_tokens
+    costValue: 0.0042
+    systemPrompt: "Think step by step before answering."
+
   - id: wall-e
     name: "Gemma 4 12B"
     modelClass: fast

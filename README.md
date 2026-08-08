@@ -293,11 +293,19 @@ a llama-swap image needs all three:
 | --- | --- |
 | `upstreamModel` | llama-swap picks which process to proxy to entirely from the request's `model` field. This is the name (or alias) the container answers to, kept separate from the `id` callers use. |
 | `port` | Not every backend listens on 8080 — a purpose-built embedding service often does not. Used for pod-IP discovery, the Service target and the container port. |
+| `backendRef` | Another model whose container serves this one. One image commonly answers to several names over the same loaded weights; each gets its own entry, and only the referenced one gets a Deployment. |
 | `firstTokenTimeoutMs` | Weights load on demand, on the first request naming a model, and the connection is held open in silence while they do. This is the allowance for that wait — a different, much longer clock than the 60s stall timeout, which only applies once tokens are flowing (§6.5). |
 
 A worked example for a full fleet, including a non-llama-swap embedding
 service on a different port, is in
 [`helm/controldeck/examples/values-model-containers.yaml`](helm/controldeck/examples/values-model-containers.yaml).
+
+Because those names live in the image rather than in the values file, the
+router checks each `upstreamModel` against its backend's `/v1/models` on every
+reconcile and reports a mismatch on the Models page — naming what the container
+actually serves. It is the failure with no other symptom: llama-swap answers an
+unrecognised name with `no model id could be identified`, at request time, to
+the caller.
 
 One thing to know about readiness: llama-swap's `/health` reports the proxy,
 not the model, and returns 200 with nothing loaded. Readiness therefore gates

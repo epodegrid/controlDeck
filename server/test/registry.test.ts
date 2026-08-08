@@ -14,6 +14,7 @@ const base: ModelRegistryRow = {
   cost_basis: "per_1k_tokens",
   endpoint_url: "http://kestrel-9b.internal",
   upstream_model: null,
+  backend_model_id: null,
   port: 8080,
   first_token_timeout_ms: null,
 };

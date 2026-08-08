@@ -34,6 +34,20 @@ llama-swap running ik_llama.cpp's `llama-server`.
 - **`upstreamModel`**, so the model name callers see is decoupled from the name
   the container answers to. A fleet's variant aliases (`eve:thinking-coding`)
   can be pointed at without exposing them as separate models.
+- **`backendRef`: several registry entries can share one container.** One image
+  commonly answers to several names over the same loaded weights. Each now gets
+  its own entry — own prompt, cost, advertised capabilities — while only the
+  referenced model gets a Deployment, a Service and a ScaledObject. Replicas,
+  in-flight accounting, cache affinity and the scaling metric are all keyed by
+  the backend, so aliases share pods and one HPA reads their combined queue
+  instead of two competing for the same capacity.
+- **Upstream names are verified against the backend.** They live in the
+  container image's own config rather than in the values file, so a rebuild can
+  rename one and leave the deployment green while every request to it fails.
+  The reconciler checks each `upstreamModel` against the backend's `/v1/models`
+  (llama-swap lists its aliases there, without loading weights) and the Models
+  page names the mismatch and what the container does serve. A backend with no
+  usable listing reports "unverifiable", never "wrong".
 - **`nodeSelector` / `tolerations` / `runtimeClassName` per model.** Model
   images are commonly built per micro-architecture; a mismatched build dies
   with an illegal instruction rather than a graceful error.

@@ -61,6 +61,16 @@ export type ModelConfig = {
    * container's, not necessarily the platform's. Defaults to the model id.
    */
   upstreamModel: string;
+  /**
+   * Which model's workload actually serves this entry.
+   *
+   * Normally the model's own id. It differs when several entries share one
+   * container — the same loaded weights answering to several aliases — in
+   * which case they all name the entry that owns the Deployment. Replicas,
+   * placement, in-flight accounting and scaling are all keyed by this rather
+   * than by `id`, because they are properties of the pod, not of the name.
+   */
+  backendModelId: string;
   /** Port the container listens on. Not every backend uses 8080. */
   port: number;
   /**

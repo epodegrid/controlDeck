@@ -71,7 +71,21 @@ export default async function ModelsPage() {
                       )}
                     </div>
                     <h3 className="text-[22px] font-normal leading-tight">{m.name}</h3>
-                    <p className="text-[11px] font-mono text-gray-2 mt-0.5">{m.id}</p>
+                    <p className="text-[11px] font-mono text-gray-2 mt-0.5">
+                      {m.id}
+                      {m.backendModelId !== m.id && (
+                        <>
+                          {" · served by "}
+                          <span className="text-gray-3">{m.backendModelId}</span>
+                        </>
+                      )}
+                      {m.upstreamModel !== m.id && (
+                        <>
+                          {" · upstream "}
+                          <span className="text-gray-3">{m.upstreamModel}</span>
+                        </>
+                      )}
+                    </p>
                   </div>
 
                   <div className="flex items-center gap-1.5">

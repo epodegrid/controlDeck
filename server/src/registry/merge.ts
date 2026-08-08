@@ -13,6 +13,7 @@ export type ModelRegistryRow = {
   cost_basis: ModelConfig["costBasis"];
   endpoint_url: string;
   upstream_model: string | null;
+  backend_model_id: string | null;
   port: number | null;
   first_token_timeout_ms: number | null;
 };
@@ -48,6 +49,8 @@ export function mergeModelConfig(base: ModelRegistryRow, override: OverrideField
     // The backend's own name for the model; the platform id is only the
     // default, since a container may answer to something else entirely.
     upstreamModel: base.upstream_model || base.id,
+    // A model is its own backend unless it explicitly points at another's.
+    backendModelId: base.backend_model_id || base.id,
     port: base.port ?? 8080,
     firstTokenTimeoutMs: base.first_token_timeout_ms ?? null,
     configSource: hasOverride ? "override" : "gitops",

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getPool } from "../../db/pool.js";
 import { listModels, listReplicasForModel, setModelOverride } from "../../registry/index.js";
+import { getUpstreamCheck } from "../../registry/verify-upstream.js";
 import { getCostBreakdown } from "../../cost/index.js";
 import { getAuditEntries, isContentLoggingEnabled, setLoggingScope, deleteAuditHistory } from "../../audit/index.js";
 
@@ -90,7 +91,12 @@ export function registerDashboardRoutes(app: FastifyInstance) {
   app.get("/api/models", async () => {
     const models = await listModels();
     const withReplicas = await Promise.all(
-      models.map(async (m) => ({ ...m, replicas: await listReplicasForModel(m.id) }))
+      models.map(async (m) => ({
+        ...m,
+        replicas: await listReplicasForModel(m.id),
+        // Null until the reconciler has reached this model's backend once.
+        upstreamCheck: getUpstreamCheck(m.id),
+      }))
     );
     return withReplicas;
   });

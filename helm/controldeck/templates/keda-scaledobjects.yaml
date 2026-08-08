@@ -1,4 +1,12 @@
 {{- range .Values.models }}
+{{- if .backendRef }}
+# {{ .id }} is an alias: it is served by {{ .backendRef }}'s container, which
+# answers to several names over one set of loaded weights. It gets its own
+# registry entry — its own system prompt, cost and advertised capabilities —
+# but no workload, no Service and no ScaledObject of its own. Giving it those
+# would run a second copy of the same model for nothing, and would split the
+# scaling signal across two HPAs contending for the same pods.
+{{- else }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -245,4 +253,5 @@ spec:
             - type: Pods
               value: {{ .keda.scaleDownPods | default 1 }}
               periodSeconds: {{ .keda.scaleDownPeriodSeconds | default 60 }}
+{{- end }}
 {{- end }}

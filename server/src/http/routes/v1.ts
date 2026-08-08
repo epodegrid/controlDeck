@@ -105,27 +105,30 @@ export function registerV1Routes(
 
     const requestId = randomUUID();
     const identity = request.identity!;
+    // Placement, affinity and scaling are all properties of the workload, not
+    // of the name it was requested under: several registry entries can be
+    // aliases over one container's loaded weights.
+    const selected = candidates.find((m) => m.id === selection.modelId)!;
+    const backendId = selected.backendModelId;
     await enqueueRequest({
       id: requestId,
       callerOid: identity.oid,
       callerName: identity.name,
       team: identity.team,
       requestedModel: body.model,
-      capabilities: candidates.find((m) => m.id === selection.modelId)?.capabilities ?? [],
+      capabilities: selected.capabilities,
     });
     await getPool().query(`UPDATE requests SET routed_model = $2 WHERE id = $1`, [requestId, selection.modelId]);
 
     // Prefer the replica already holding this conversation's KV cache. Keyed
     // on the caller plus the opening messages, which stay constant as the
     // conversation grows — see scheduler/affinity.ts.
-    const affinityKey = affinityKeyFor(identity, selection.modelId, body.messages) ?? undefined;
+    //
+    // Keyed on the backend rather than the requested model, so two aliases of
+    // the same weights share cache locality instead of competing for it.
+    const affinityKey = affinityKeyFor(identity, backendId, body.messages) ?? undefined;
 
-    const placement = await waitForPlacement(
-      selection.modelId,
-      requestId,
-      deps.kedaClient,
-      affinityKey
-    );
+    const placement = await waitForPlacement(backendId, requestId, deps.kedaClient, affinityKey);
     if (!placement.ok) {
       reply.code(statusForError(placement.error)).send(placement.error);
       return;
@@ -137,7 +140,7 @@ export function registerV1Routes(
       requestId,
       placement.affinityHit,
     ]);
-    const model = candidates.find((m) => m.id === selection.modelId)!;
+    const model = selected;
     // The placed replica's own address — falling back to the model-level one
     // only for registries predating per-replica endpoints.
     const targetUrl = placement.endpointUrl || model.endpointUrl;
@@ -315,7 +318,7 @@ export function registerV1Routes(
     });
     await getPool().query(`UPDATE requests SET routed_model = $2 WHERE id = $1`, [requestId, model.id]);
 
-    const placement = await waitForPlacement(model.id, requestId, deps.kedaClient);
+    const placement = await waitForPlacement(model.backendModelId, requestId, deps.kedaClient);
     if (!placement.ok) {
       reply.code(statusForError(placement.error)).send(placement.error);
       return;

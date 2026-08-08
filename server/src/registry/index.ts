@@ -47,12 +47,26 @@ export async function setModelOverride(
   return getModel(modelId);
 }
 
+/**
+ * Replicas serving a registry entry.
+ *
+ * Resolves through `backend_model_id` first: an entry that is an alias over
+ * another model's container has no replicas of its own, and showing it as
+ * having none would misrepresent a model that is in fact running and serving
+ * traffic. Aliases of the same workload therefore show the same pods, which is
+ * the truth — they are the same pods.
+ */
 export async function listReplicasForModel(modelId: string) {
   const pool = getPool();
   const res = await pool.query(
-    `SELECT id, model_id AS "modelId", status, in_flight AS "inFlight",
-       load_pct::float8 AS "loadPct", tokens_per_sec::float8 AS "tokensPerSec"
-     FROM replicas WHERE model_id = $1 ORDER BY id`,
+    `SELECT r.id, r.model_id AS "modelId", r.status, r.in_flight AS "inFlight",
+       r.load_pct::float8 AS "loadPct", r.tokens_per_sec::float8 AS "tokensPerSec"
+     FROM replicas r
+     WHERE r.model_id = COALESCE(
+       (SELECT COALESCE(backend_model_id, id) FROM model_registry WHERE id = $1),
+       $1
+     )
+     ORDER BY r.id`,
     [modelId]
   );
   return res.rows;

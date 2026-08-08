@@ -36,6 +36,16 @@ export type GitOpsModel = {
   endpointUrl?: string;
   /** Name the backend answers to; llama-swap routes on it. Defaults to `id`. */
   upstreamModel?: string;
+  /**
+   * Another model in this config whose workload serves this one.
+   *
+   * For the common case where one image answers to several names — llama-swap
+   * aliases over the same loaded weights. The referenced model owns the
+   * Deployment and the replicas; this entry only adds a distinct
+   * platform-level identity (its own prompt, cost and advertised
+   * capabilities) on top of it.
+   */
+  backendRef?: string;
   /** Port the container listens on. Defaults to 8080. */
   port?: number;
   /** Allowance for weight loading on the first request. */
@@ -64,9 +74,40 @@ export async function readModelsConfig(path = CONFIG_PATH): Promise<GitOpsModel[
   const models = Array.isArray(parsed) ? parsed : (parsed.models ?? []);
 
   for (const model of models) {
+    // Helm cannot omit a dict key conditionally, so an ordinary model arrives
+    // with backendRef: "". Normalise before validating, or every such model
+    // would be rejected as pointing at a model named "".
+    if (model.backendRef === "") delete model.backendRef;
+  }
+
+  const ids = new Set(models.map((m) => m.id));
+  for (const model of models) {
     if (!model.id) throw new Error("every model in the config needs an id");
     if (!Array.isArray(model.capabilities) || model.capabilities.length === 0) {
       throw new Error(`model "${model.id}" declares no capabilities, so nothing could route to it`);
+    }
+    if (model.backendRef !== undefined) {
+      // Caught here rather than at request time, where the symptom would be a
+      // model that is advertised by /v1/models and has no replicas, with
+      // nothing to say why.
+      if (!ids.has(model.backendRef)) {
+        throw new Error(
+          `model "${model.id}" has backendRef "${model.backendRef}", which is not a model in this config`
+        );
+      }
+      if (model.backendRef === model.id) {
+        throw new Error(`model "${model.id}" has backendRef pointing at itself`);
+      }
+      const target = models.find((m) => m.id === model.backendRef)!;
+      if (target.backendRef !== undefined) {
+        // One level only. A chain would need resolving at every read, and the
+        // shape it describes — an alias of an alias — has no counterpart in a
+        // llama-swap config.
+        throw new Error(
+          `model "${model.id}" points at "${model.backendRef}", which is itself a backendRef. ` +
+            `Point it at the model that owns the workload instead.`
+        );
+      }
     }
   }
   return models;
@@ -93,8 +134,8 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
         `INSERT INTO model_registry
            (id, name, class_label, model_class, capabilities, min_replicas, max_replicas,
             system_prompt, cost_value, cost_basis, endpoint_url,
-            upstream_model, port, first_token_timeout_ms, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now())
+            upstream_model, port, first_token_timeout_ms, backend_model_id, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name,
            class_label = EXCLUDED.class_label,
@@ -109,6 +150,7 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
            upstream_model = EXCLUDED.upstream_model,
            port = EXCLUDED.port,
            first_token_timeout_ms = EXCLUDED.first_token_timeout_ms,
+           backend_model_id = EXCLUDED.backend_model_id,
            updated_at = now()`,
         [
           model.id,
@@ -121,10 +163,13 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
           model.systemPrompt ?? "",
           model.costValue ?? 0,
           model.costBasis ?? "per_1k_tokens",
-          model.endpointUrl ?? defaultEndpoint(model.id),
+          // An alias has no Service of its own — it resolves to the workload
+          // that actually serves it.
+          model.endpointUrl ?? defaultEndpoint(model.backendRef ?? model.id),
           model.upstreamModel ?? model.id,
           model.port ?? 8080,
           model.firstTokenTimeoutMs ?? null,
+          model.backendRef ?? null,
         ]
       );
     }

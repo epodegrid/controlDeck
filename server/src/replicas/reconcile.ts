@@ -2,6 +2,11 @@ import { getPool } from "../db/pool.js";
 import { listModels } from "../registry/index.js";
 import { replicaEndpointsFor, replicaIdFor } from "./discovery.js";
 import { inCluster, listModelPods } from "./kubernetes.js";
+import {
+  listUpstreamNames,
+  checkUpstreamName,
+  recordUpstreamCheck,
+} from "../registry/verify-upstream.js";
 
 /**
  * Keeps the `replicas` table in step with what the model backends are actually
@@ -82,7 +87,22 @@ export async function reconcileReplicas(): Promise<ReconcileSummary> {
 
   const seenIds: string[] = [];
 
+  // Probe backends, not registry entries. Several entries can share one
+  // workload — llama-swap aliases over the same loaded weights — and a replica
+  // is a property of the pod, not of the name. Probing per entry would have
+  // each alias rediscover the same pods and overwrite one another's rows (the
+  // pod name is the replica id), and would multiply the probe traffic by the
+  // number of aliases for no new information.
+  const backends = new Map<string, (typeof models)[number]>();
   for (const model of models) {
+    if (!backends.has(model.backendModelId)) {
+      // Prefer the owning entry's own config where it exists, since that is
+      // the one carrying the workload's port and endpoint.
+      backends.set(model.backendModelId, models.find((m) => m.id === model.backendModelId) ?? model);
+    }
+  }
+
+  for (const model of backends.values()) {
     // In-cluster, a replica is a pod: addressed by its own IP and named so the
     // log tail can ask the Kubernetes API for it. Everywhere else, the
     // configured endpoint list. Falling back to the model's Service address
@@ -91,23 +111,23 @@ export async function reconcileReplicas(): Promise<ReconcileSummary> {
     let candidates: Array<{ id: string; endpointUrl: string }>;
     if (inCluster()) {
       try {
-        const pods = await listModelPods(model.id, model.port);
+        const pods = await listModelPods(model.backendModelId, model.port);
         candidates = pods.map((pod) => ({ id: pod.name, endpointUrl: pod.endpointUrl }));
       } catch (err) {
         // A denied or failing pod list must not wipe the fleet from the
         // dashboard; keep the previous view and let the next pass retry.
         console.error(
-          `[reconcile] pod discovery failed for ${model.id}: ${err instanceof Error ? err.message : err}`
+          `[reconcile] pod discovery failed for ${model.backendModelId}: ${err instanceof Error ? err.message : err}`
         );
         const { rows } = await pool.query<{ id: string; endpoint_url: string }>(
           `SELECT id, endpoint_url FROM replicas WHERE model_id = $1`,
-          [model.id]
+          [model.backendModelId]
         );
         candidates = rows.map((r) => ({ id: r.id, endpointUrl: r.endpoint_url }));
       }
     } else {
       candidates = replicaEndpointsFor(model).map((endpointUrl) => ({
-        id: replicaIdFor(model.id, endpointUrl),
+        id: replicaIdFor(model.backendModelId, endpointUrl),
         endpointUrl,
       }));
     }
@@ -120,6 +140,19 @@ export async function reconcileReplicas(): Promise<ReconcileSummary> {
         ...(await probeReplica(candidate.endpointUrl)),
       }))
     );
+
+    // Verify the configured upstream names against what the backend actually
+    // serves, using any replica that answered. The names live in the container
+    // image's own config, so this is the only place the two can be compared —
+    // and a mismatch otherwise surfaces only as a failed request.
+    const reachable = probes.find((p) => p.status === "ready");
+    if (reachable) {
+      const available = await listUpstreamNames(reachable.endpointUrl);
+      for (const entry of models) {
+        if (entry.backendModelId !== model.backendModelId) continue;
+        recordUpstreamCheck(entry.id, checkUpstreamName(entry, available));
+      }
+    }
 
     for (const probe of probes) {
       seenIds.push(probe.id);
@@ -142,7 +175,7 @@ export async function reconcileReplicas(): Promise<ReconcileSummary> {
              ELSE 0
            END,
            updated_at = now()`,
-        [probe.id, model.id, probe.status, probe.endpointUrl, probe.maxConcurrency]
+        [probe.id, model.backendModelId, probe.status, probe.endpointUrl, probe.maxConcurrency]
       );
     }
   }
