@@ -249,7 +249,7 @@ Images and the chart are published to GHCR on every tagged release:
 
 ```bash
 helm install controldeck \
-  oci://ghcr.io/epodegrid/charts/controldeck --version 0.1.0 \
+  oci://ghcr.io/epodegrid/charts/controldeck --version 0.2.0 \
   --set router.env.ENTRA_JWKS_URI="https://login.microsoftonline.com/<tenant>/discovery/v2.0/keys" \
   --set router.env.ENTRA_ISSUER="https://login.microsoftonline.com/<tenant>/v2.0" \
   --set dashboard.env.DASHBOARD_ENTRA_TENANT_ID="<tenant>" \
@@ -299,6 +299,9 @@ helm upgrade --install controldeck ./helm/controldeck --set mockModels.enabled=t
 Dashboard changes are written to `model_registry_overrides` and merged on top of the Helm base config at read time. A Helm redeploy never clobbers them, and the Models view marks which fields are overridden. Helm wins on genuine field conflicts (§6.2, §11).
 
 ---
+
+Upgrading between versions: see [CHANGELOG.md](CHANGELOG.md). 0.2.0 changes the
+Postgres values shape and the status code for an unknown model.
 
 ## Releasing
 
