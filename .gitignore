@@ -50,5 +50,6 @@ next-env.d.ts
 /blob-report/
 /.playwright-mcp/
 
-# helm — the lock is committed for reproducibility, the vendored subchart is not
-helm/**/charts/
+# helm — the lock and the vendored subchart are both committed. An air-gapped
+# cluster cannot reach a chart repository at install time, so KEDA has to ship
+# in the tree rather than be fetched by `helm dependency update` on the way in.

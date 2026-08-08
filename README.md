@@ -284,6 +284,45 @@ helm upgrade --install controldeck ./helm/controldeck \
 
 Models are registered as config-as-code under `models:` in `values.yaml` (§6.2). Each entry produces a Deployment, a Service, and a KEDA `ScaledObject`.
 
+### KEDA
+
+KEDA is vendored as a subchart, so `keda.enabled=true` installs the autoscaler
+as part of the same release and nothing is fetched from a chart repository —
+which an air-gapped cluster could not reach anyway.
+
+It is **off by default**, and that default is the safe one. KEDA is a
+cluster-scoped operator: two of them reconcile the same `ScaledObject`s and
+fight, and `helm uninstall controldeck` would take it away from every other
+workload in the cluster that depends on it. Enable it only where this chart
+owns autoscaling cluster-wide. The chart refuses to install with it on when it
+finds a KEDA it does not own, rather than quietly creating a second one.
+
+The `ScaledObject`s this chart creates work with any KEDA in the cluster, so
+leaving it off is not a lesser option — it is the right one wherever something
+else owns the operator.
+
+Bumping the KEDA version means refreshing both the vendored chart and the
+vendored CRDs, and applying the CRDs by hand once (Helm never upgrades
+`crds/`):
+
+```bash
+helm/controldeck/refresh-keda-crd.sh
+kubectl apply --server-side -f helm/controldeck/crds/
+```
+
+Note that Helm installs `crds/` unconditionally — there is no way to make it
+conditional — so the KEDA CRDs are created even with `keda.enabled=false`. They
+are inert without the operator, but they carry no Helm ownership metadata, so a
+later standalone `helm install keda` fails to adopt them. Hand them over first:
+
+```bash
+for c in $(kubectl get crd -o name | grep keda.sh); do
+  kubectl annotate "$c" meta.helm.sh/release-name=keda \
+    meta.helm.sh/release-namespace=keda --overwrite
+  kubectl label "$c" app.kubernetes.io/managed-by=Helm --overwrite
+done
+```
+
 ### Pointing at real model containers
 
 Three per-model fields exist for the backend rather than for the platform, and

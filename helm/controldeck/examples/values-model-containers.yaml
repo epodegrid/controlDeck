@@ -204,6 +204,34 @@ metricsApi:
   enabled: true
   port: 9090
 
+# ===========================================================================
+# KEDA
+# ===========================================================================
+#
+# Bundled as a subchart, vendored into the tree, so this one `helm install`
+# brings up the autoscaler too and nothing is fetched from a chart repository.
+#
+# Turn this OFF if the cluster already runs KEDA — a shared cluster very often
+# does. It is a cluster-scoped operator: two of them reconcile the same
+# ScaledObjects and fight, and `helm uninstall controldeck` would take KEDA
+# away from every other workload depending on it. The chart refuses to install
+# with this on when it finds a KEDA it does not own, rather than quietly
+# creating a second one.
+#
+# The ScaledObjects this chart creates work with any KEDA in the cluster, so
+# `enabled: false` is not a lesser option — it is the right one wherever
+# something else owns the operator.
+keda:
+  enabled: true
+  # CHANGE ME — mirror the three KEDA images into the internal registry.
+  # image:
+  #   keda:
+  #     repository: <registry>/kedacore/keda
+  #   metricsApiServer:
+  #     repository: <registry>/kedacore/keda-metrics-apiserver
+  #   webhooks:
+  #     repository: <registry>/kedacore/keda-admission-webhooks
+
 # Real models, never the mock fleet.
 mockModels:
   enabled: false
@@ -413,12 +441,11 @@ models:
 # Before you deploy
 # ===========================================================================
 #
-# 1. KEDA must already be installed in the cluster. This chart creates
-#    ScaledObjects; it does not install the operator.
+# 1. Mirror the KEDA images (see the keda block above). The chart itself is
+#    vendored, so nothing is fetched from a chart repository — but the images
+#    still come from wherever you point them.
 #
-#      helm install keda kedacore/keda --namespace keda --create-namespace
-#
-#    Air-gapped: mirror the KEDA images and pull the chart in beforehand.
+#    If the cluster already runs KEDA, set keda.enabled=false instead.
 #
 # 2. Pre-pull the model images onto their node pools. A 35B image is tens of
 #    GB across several layers; the first scale-up otherwise waits on the pull

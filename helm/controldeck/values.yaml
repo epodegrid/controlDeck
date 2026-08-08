@@ -103,6 +103,38 @@ ingress:
           pathType: Prefix
           service: router
 
+# KEDA, vendored as a subchart (charts/keda-*.tgz) so no chart repository is
+# needed at install time.
+#
+# Off by default, and that default is the safe one. KEDA is a cluster-scoped
+# operator: its CRDs are cluster-wide, two operators reconciling the same
+# ScaledObjects conflict, and `helm uninstall controldeck` would remove it from
+# every other workload in the cluster that depends on it. Enable it only where
+# this chart owns autoscaling cluster-wide — a dedicated cluster, or one where
+# nothing else uses KEDA.
+#
+# The chart refuses to install with this on when a KEDA it does not own is
+# already present, rather than quietly running a second operator.
+#
+# Everything under this key is passed to the KEDA chart itself; see
+# https://github.com/kedacore/charts/tree/main/keda for the full set.
+keda:
+  enabled: false
+  # The CRDs are vendored into this chart's crds/ directory instead — see the
+  # header of crds/keda-crds.yaml. Two Helm-managed copies of one CRD fight
+  # over ownership and fail the install outright, so there must be exactly one
+  # owner. Do not turn this back on.
+  crds:
+    install: false
+  # Air-gapped: repoint these at the internal mirror.
+  # image:
+  #   keda:
+  #     repository: ghcr.io/kedacore/keda
+  #   metricsApiServer:
+  #     repository: ghcr.io/kedacore/keda-metrics-apiserver
+  #   webhooks:
+  #     repository: ghcr.io/kedacore/keda-admission-webhooks
+
 # Postgres is deployed by this chart from the official image rather than by a
 # third-party subchart — see templates/postgres.yaml for why.
 postgresql:

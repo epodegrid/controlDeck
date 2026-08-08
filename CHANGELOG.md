@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **KEDA can be installed by this chart.** Vendored as a subchart
+  (`charts/keda-*.tgz`, committed) so `helm install` needs no chart repository,
+  which an air-gapped cluster cannot reach. One release now brings up the
+  gateway, its database, its models and the autoscaler.
+
+  Off by default. KEDA is cluster-scoped: two operators reconcile the same
+  ScaledObjects and fight, and `helm uninstall` would remove it from every
+  other workload using it. With it on, the chart refuses to install over a
+  KEDA it does not own rather than quietly creating a second one — Helm skips
+  CRDs that already exist, so that case fails silently at install and
+  confusingly later.
+
+  KEDA ships its CRDs in `templates/`, which cannot work here: Helm resolves
+  every manifest's kind before applying anything, so the install failed with
+  "no matches for kind ScaledObject" before KEDA's own CRD existed. The CRDs
+  are therefore vendored into this chart's `crds/` (installed ahead of all
+  templates) and the subchart's copies disabled, since two Helm-managed copies
+  of one CRD fail on ownership. `refresh-keda-crd.sh` re-vendors both together.
+
 ## 0.3.1
 
 Found while matching the example values to the real `epodegrid/model-containers`

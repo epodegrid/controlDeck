@@ -1,0 +1,32 @@
+{{- if .Values.keda.enabled }}
+{{- /*
+Refuses to install a second KEDA over one this release does not own.
+
+KEDA is cluster-scoped. Its CRDs are cluster-wide and Helm installs CRDs from a
+chart's crds/ directory only when they are absent — so a second install does
+not fail on a conflict, it silently proceeds and leaves two operators
+reconciling the same ScaledObjects. That shows up later as autoscaling that
+fights itself, which is a miserable thing to diagnose from the symptom.
+
+The operator Deployment carries Helm's own ownership annotations, so an install
+that belongs to a different release is detectable. `lookup` returns nothing
+during `helm template` and `--dry-run` (client), so this guard applies to real
+installs only — it cannot be relied on as a rendering-time check.
+*/}}
+{{- $ownedByUs := false }}
+{{- $foundIn := "" }}
+{{- range $ns := list .Release.Namespace "keda" "kube-system" }}
+  {{- $dep := lookup "apps/v1" "Deployment" $ns "keda-operator" }}
+  {{- if $dep }}
+    {{- $ann := $dep.metadata.annotations | default dict }}
+    {{- if and (eq (get $ann "meta.helm.sh/release-name") $.Release.Name) (eq (get $ann "meta.helm.sh/release-namespace") $.Release.Namespace) }}
+      {{- $ownedByUs = true }}
+    {{- else }}
+      {{- $foundIn = $ns }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- if and $foundIn (not $ownedByUs) }}
+{{- fail (printf "KEDA is already installed in namespace %q and is not owned by this release. Running a second operator would leave two reconciling the same ScaledObjects. Set keda.enabled=false to use the existing one — the ScaledObjects this chart creates work with any KEDA in the cluster." $foundIn) }}
+{{- end }}
+{{- end }}
