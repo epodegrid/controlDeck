@@ -130,21 +130,57 @@ async function pump(
 }
 
 /**
- * Tails the replica's own /logs endpoint. Used where there is no Kubernetes —
+ * Tails the replica's own log endpoint. Used where there is no Kubernetes —
  * docker compose, or anything running the mock model.
+ *
+ * The two servers this talks to disagree on both the path and the wire format:
+ *
+ *   llama-swap  GET /logs/stream        -> text/plain, chunked, raw lines
+ *               (GET /logs is a one-shot history dump, NOT a stream)
+ *   mock model  GET /logs?follow=true   -> text/event-stream, `data:` frames
+ *
+ * We used to ask every replica for the mock's shape, so against a real
+ * llama-swap image this hit the non-streaming history endpoint and then looked
+ * for `data:` frames that a text/plain body never contains — the panel stayed
+ * empty and the stream closed immediately. Try llama-swap's endpoint first,
+ * fall back to the mock's, and let the response's own content-type decide how
+ * to parse it rather than assuming.
+ *
+ * Note llama-swap has no tail parameter: /logs/stream replays its whole
+ * retained history before following. `tail` is honoured on the mock only.
  */
-async function tailFromEndpoint(
+export async function tailFromEndpoint(
   endpointUrl: string,
   replicaId: string,
   tail: number,
   onLine: (line: LogLine) => void,
   signal: AbortSignal
 ): Promise<void> {
-  const res = await fetch(`${endpointUrl}/logs?follow=true&tail=${tail}`, { signal });
-  if (!res.ok || !res.body) {
-    throw new Error(`replica log endpoint returned ${res.status}`);
+  const candidates = [
+    `${endpointUrl}/logs/stream`,
+    `${endpointUrl}/logs?follow=true&tail=${tail}`,
+  ];
+
+  let stream: Response | null = null;
+  let lastStatus = 0;
+
+  for (const url of candidates) {
+    const res = await fetch(url, { signal });
+    if (res.ok && res.body) {
+      stream = res;
+      break;
+    }
+    lastStatus = res.status;
+    // Release the socket; an unread body keeps the connection open.
+    await res.body?.cancel().catch(() => {});
   }
-  await pump(res.body, replicaId, onLine, { sse: true });
+
+  if (!stream || !stream.body) {
+    throw new Error(`replica log endpoint returned ${lastStatus}`);
+  }
+
+  const sse = (stream.headers.get("content-type") ?? "").includes("text/event-stream");
+  await pump(stream.body, replicaId, onLine, { sse });
 }
 
 /**

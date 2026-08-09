@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLine } from "../src/logs/sources.js";
+import { parseLine, tailFromEndpoint, type LogLine } from "../src/logs/sources.js";
 import { createRedactor, REDACTED } from "../src/logs/redact.js";
 
 /**
@@ -90,5 +90,80 @@ describe("model server log parsing", () => {
   it("can be turned off for an operator who needs raw output", () => {
     const redact = createRedactor(false);
     expect(redact("<|im_start|>assistant")).toBe("<|im_start|>assistant");
+  });
+});
+
+/**
+ * The endpoint log source, against both server shapes it has to speak.
+ *
+ * llama-swap and the mock model disagree on the path AND the wire format, and
+ * asking every replica for the mock's shape meant a real llama-swap image
+ * streamed nothing at all: /logs is a one-shot history dump there, and its
+ * text/plain body never contains the `data:` frames the SSE parser looks for.
+ */
+describe("tailFromEndpoint", () => {
+  /** Minimal server standing in for one of the two real implementations. */
+  async function serve(
+    handler: (path: string, res: import("node:http").ServerResponse) => void
+  ): Promise<{ url: string; close: () => Promise<void> }> {
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => handler(req.url ?? "", res));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    return {
+      url: `http://127.0.0.1:${port}`,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  it("streams llama-swap's plain-text /logs/stream", async () => {
+    const srv = await serve((path, res) => {
+      if (path.startsWith("/logs/stream")) {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("INFO [server] loading model\nERROR [server] could not load weights\n");
+        return;
+      }
+      // /logs exists but is a history dump, exactly as llama-swap serves it.
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("history\n");
+    });
+
+    const lines: LogLine[] = [];
+    await tailFromEndpoint(srv.url, "r1", 50, (l) => lines.push(l), new AbortController().signal);
+    await srv.close();
+
+    // parseLine consumes the level word and keeps the component tag.
+    expect(lines.map((l) => l.message)).toEqual([
+      "[server] loading model",
+      "[server] could not load weights",
+    ]);
+    expect(lines.map((l) => l.level)).toEqual(["info", "error"]);
+  });
+
+  it("falls back to the mock model's SSE /logs when /logs/stream is absent", async () => {
+    const srv = await serve((path, res) => {
+      if (path.startsWith("/logs/stream")) {
+        res.writeHead(404).end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ ts: "t", level: "info", source: "m", message: "hello" })}\n\n`);
+      res.write(": keep-alive\n\n");
+      res.end();
+    });
+
+    const lines: LogLine[] = [];
+    await tailFromEndpoint(srv.url, "r1", 50, (l) => lines.push(l), new AbortController().signal);
+    await srv.close();
+
+    expect(lines.map((l) => l.message)).toEqual(["hello"]);
+  });
+
+  it("reports the status when neither endpoint serves logs", async () => {
+    const srv = await serve((_path, res) => res.writeHead(503).end());
+    await expect(
+      tailFromEndpoint(srv.url, "r1", 50, () => {}, new AbortController().signal)
+    ).rejects.toThrow(/503/);
+    await srv.close();
   });
 });
