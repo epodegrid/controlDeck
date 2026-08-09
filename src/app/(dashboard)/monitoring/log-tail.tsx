@@ -2,7 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+/**
+ * Same-origin, proxied to the router by src/app/gateway/[...path]/route.ts.
+ *
+ * Not NEXT_PUBLIC_API_BASE_URL: Next inlines that at build time, so the
+ * published image carries the build-time fallback — localhost:4000 — into
+ * every browser, whatever the chart sets at run time.
+ */
+const API_BASE_URL = "/gateway";
 
 const MAX_LINES = 200;
 

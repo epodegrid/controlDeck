@@ -27,7 +27,7 @@ export function registerSystemRoutes(app: FastifyInstance, deps: { kedaClient?: 
   app.get("/metrics/keda/:modelId", async (request) => {
     const { modelId } = request.params as { modelId: string };
     const keda = deps.kedaClient;
-    const preemptive = keda instanceof MetricsKedaClient ? keda.wantsScaleUp(modelId) : false;
+    const preemptive = keda instanceof MetricsKedaClient ? await keda.wantsScaleUp(modelId) : false;
     return getKedaMetricForModel(modelId, preemptive);
   });
 

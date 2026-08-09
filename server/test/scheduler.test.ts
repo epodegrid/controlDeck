@@ -365,7 +365,7 @@ describe("scheduler", () => {
       const keda = new MetricsKedaClient();
       await placeRequest(MODEL_ID, { kedaClient: keda });
 
-      expect(keda.wantsScaleUp(MODEL_ID)).toBe(true);
+      expect(await keda.wantsScaleUp(MODEL_ID)).toBe(true);
       const metric = await getKedaMetricForModel(MODEL_ID, true);
       expect(metric.pending_requests).toBe(2);
     });
@@ -707,5 +707,28 @@ describe("scheduler", () => {
       const replicaResult = await pool.query("SELECT in_flight FROM replicas WHERE id = 'r-complete'");
       expect(replicaResult.rows[0].in_flight).toBe(0);
     });
+  });
+});
+
+describe("preemptive scale-up signal", () => {
+  // §6.4's warm spare, and §8's requirement that the router runs more than one
+  // replica. KEDA polls the router Service, so a signal recorded by one router
+  // pod has to be visible to a poll answered by another — it used to live in a
+  // per-process Map, which made the spare a coin flip.
+  it("is visible to a different router instance", async () => {
+    const { MetricsKedaClient } = await import("../src/adapters/keda.js");
+    const modelId = `keda-${randomUUID().slice(0, 8)}`;
+
+    const routerA = new MetricsKedaClient();
+    const routerB = new MetricsKedaClient(); // stands in for the other pod
+
+    expect(await routerB.wantsScaleUp(modelId)).toBe(false);
+    await routerA.requestScaleUp(modelId);
+    expect(await routerB.wantsScaleUp(modelId)).toBe(true);
+
+    // And it ages out, so one burst does not hold a spare open indefinitely.
+    expect(await routerB.wantsScaleUp(modelId, 0)).toBe(false);
+
+    await getPool().query(`DELETE FROM scale_signals WHERE model_id = $1`, [modelId]);
   });
 });

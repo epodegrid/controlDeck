@@ -34,8 +34,14 @@ const routerEnv = {
 };
 
 const dashboardEnv = {
+  // Server-side only, exactly as the chart sets it. NEXT_PUBLIC_API_BASE_URL is
+  // deliberately absent: setting it here made the browser call the router
+  // directly, which no deployment can reproduce — Next inlines NEXT_PUBLIC_*
+  // at build time, so the published image always carried the localhost
+  // fallback instead. The suite passed for two releases while every
+  // client-side call was broken in the cluster. Leave it unset so these tests
+  // exercise the same-origin /gateway proxy the browser actually uses.
   API_BASE_URL: `http://localhost:${ROUTER_PORT}`,
-  NEXT_PUBLIC_API_BASE_URL: `http://localhost:${ROUTER_PORT}`,
   DASHBOARD_APP_URL: `http://localhost:${DASH_PORT}`,
   DASHBOARD_SESSION_SECRET: "e2e-session-secret-at-least-32-characters-long",
   DASHBOARD_ENTRA_AUTHORITY: AUTHORITY,

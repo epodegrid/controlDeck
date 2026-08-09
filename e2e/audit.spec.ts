@@ -31,8 +31,16 @@ test.describe("audit", () => {
     await expect(toggle).toBeVisible();
 
     const before = await toggle.getAttribute("aria-checked");
+
+    // The knob moves optimistically, so the click resolving proves nothing.
+    // Wait for the write itself: reloading before it lands tests the race, not
+    // the persistence this is about.
+    const saved = page.waitForResponse(
+      (r) => r.url().includes("/api/audit/logging-config") && r.request().method() === "PUT"
+    );
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-checked", before === "true" ? "false" : "true");
+    expect((await saved).ok()).toBe(true);
 
     // The real assertion: it survives a round-trip to the router, rather than
     // only flipping in local state.

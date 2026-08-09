@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Every client-side dashboard call went to `localhost:4000`.** Next inlines
+  `NEXT_PUBLIC_*` into the client bundle at *build* time, so the value the Helm
+  chart sets at run time never reached the browser and the published image
+  shipped the build-time fallback baked in. The log tail, the content-logging
+  toggles, the delete-history button and the model-override form were all
+  pointed at a port nothing listens on in a cluster, while server-rendered
+  pages — which use the run-time `API_BASE_URL` — worked perfectly, so the
+  dashboard looked healthy.
+
+  The browser now calls its own origin and the dashboard forwards
+  (`/gateway/[...path]`), which needs no ingress rule and works unchanged under
+  `kubectl port-forward` and in local development. Routing the browser straight
+  at the router was the wrong fix: `/api/*` is deliberately unauthenticated —
+  the dashboard's session guards it — so publishing it would hand anyone who
+  could reach the host the ability to edit the registry and delete audit
+  history.
+
+  The e2e suite passed throughout because it set `NEXT_PUBLIC_API_BASE_URL`,
+  reproducing a configuration no deployment can have. It no longer does.
+
+- **The preemptive scale-up signal was per-process.** §6.4's warm spare was
+  recorded in a `Map`, while KEDA polls the router *Service* — so with the two
+  router replicas §8 asks for, the poll reached the pod holding the signal
+  about half the time and the spare was requested by coin flip. It lives in
+  Postgres now. Demand-based scaling was unaffected: `in_flight` and `queued`
+  always came from shared state, so the flag only decided the case where demand
+  is still zero, which is the one preemptive scaling exists for.
+
+- **A write cancelled by navigation was silently lost.** The dashboard toggles
+  move optimistically; clicking one and immediately navigating showed the
+  change applied and never made it. Those requests are `keepalive` now.
+
 ## 0.4.1
 
 ### Fixed

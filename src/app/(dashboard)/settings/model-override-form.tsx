@@ -4,7 +4,14 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CostBasis } from "@/lib/api";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+/**
+ * Same-origin, proxied to the router by src/app/gateway/[...path]/route.ts.
+ *
+ * Not NEXT_PUBLIC_API_BASE_URL: Next inlines that at build time, so the
+ * published image carries the build-time fallback — localhost:4000 — into
+ * every browser, whatever the chart sets at run time.
+ */
+const API_BASE_URL = "/gateway";
 
 export function ModelOverrideForm({
   modelId,
@@ -37,6 +44,11 @@ export function ModelOverrideForm({
     try {
       const res = await fetch(`${API_BASE_URL}/api/models/${modelId}/override`, {
         method: "PATCH",
+        // Survives the page being navigated or reloaded mid-flight. The knob
+        // moves optimistically, so without this a user who clicks and moves on
+        // immediately sees the change applied and loses it — the browser
+        // cancels in-flight requests on navigation.
+        keepalive: true,
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           minReplicas: Number(min),
