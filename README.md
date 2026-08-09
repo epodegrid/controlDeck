@@ -309,6 +309,27 @@ helm upgrade --install controldeck ./helm/controldeck \
 
 Models are registered as config-as-code under `models:` in `values.yaml` (§6.2). Each entry produces a Deployment, a Service, and a KEDA `ScaledObject`.
 
+### When autoscaling does not happen
+
+`scripts/diagnose-keda.sh <namespace> [model-id]` is read-only and safe against
+production. It checks, in order, the things that fail *silently* — where the
+ScaledObject looks healthy, the router looks healthy, and nothing scales:
+
+1. ScaledObjects exist.
+2. KEDA created an HPA for one. If not, it checks whether the operator is
+   scoped with `WATCH_NAMESPACE` to some other namespace, which is the usual
+   cause on a shared cluster and produces no error anywhere.
+3. The HPA can actually read the metric (`ScalingActive` / `FailedGetExternalMetric`).
+4. `v1beta1.external.metrics.k8s.io` is served by KEDA. It is a cluster
+   singleton, so a second adapter — the AKS KEDA add-on, Azure Monitor, a
+   Prometheus adapter — takes it over and breaks every KEDA HPA in the cluster.
+5. The router's metric endpoint is reachable from KEDA's own namespace, and
+   what value it currently reports.
+
+The first FAIL is the cause; later checks assume the earlier ones passed. A
+metric of 0 with no traffic is correct, not a fault — one in-flight request
+should read 2 (demand 1, plus the warm spare).
+
 ### KEDA
 
 KEDA is vendored as a subchart, so `keda.enabled=true` installs the autoscaler
