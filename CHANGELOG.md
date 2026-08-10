@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+Everything an agent client needs, and the means to diagnose autoscaling without
+a shell on the cluster. Verified against a real llama-swap container and a real
+opencode session.
 
 ### Added
 
