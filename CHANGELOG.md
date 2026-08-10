@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
+
+The NetworkPolicy shipped in 0.5.0 did not work. Tested against a real
+default-deny CNI this time, rather than reasoned about.
 
 ### Fixed
 
