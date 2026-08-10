@@ -135,6 +135,57 @@ describe("HttpLlamaSwapClient wire format", () => {
     expect(body.seed).toBe(7);
   });
 
+  it("returns the model's tool calls, which are the whole point of an agent client", async () => {
+    // Shape copied from a real llama.cpp stream: the first frame carries the
+    // id and function name, later frames append argument fragments.
+    respond = (_p, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const frame = (delta: unknown, finish: string | null = null) =>
+        `data: ${JSON.stringify({
+          id: "chatcmpl-abc",
+          object: "chat.completion.chunk",
+          model: "/models/x.gguf",
+          choices: [{ index: 0, delta, finish_reason: finish }],
+        })}\n\n`;
+      res.write(
+        frame({
+          tool_calls: [
+            { index: 0, id: "call_1", type: "function", function: { name: "read_file", arguments: "" } },
+          ],
+        })
+      );
+      res.write(frame({ tool_calls: [{ index: 0, function: { arguments: '{"path":' } }] }));
+      res.write(frame({ tool_calls: [{ index: 0, function: { arguments: '"a.ts"}' } }] }));
+      res.write(frame({}, "tool_calls"));
+      res.write("data: [DONE]\n\n");
+      res.end();
+    };
+
+    const client = new HttpLlamaSwapClient();
+    const calls: any[] = [];
+    let finish: string | null | undefined;
+    for await (const t of client.streamChat({
+      endpointUrl: baseUrl,
+      model: "tiny",
+      messages: [{ role: "user", content: "read a.ts" }],
+      tools: [{ type: "function", function: { name: "read_file" } }],
+    })) {
+      if (t.toolCalls) calls.push(...t.toolCalls);
+      if (t.done) finish = t.finishReason;
+    }
+
+    // Dropping these was invisible to every previous test, which only checked
+    // that sending tools did not break the stream. The client saw plain text
+    // and behaved exactly like a model refusing to use its tools.
+    expect(calls).toHaveLength(3);
+    expect(calls[0].function.name).toBe("read_file");
+    expect(calls.map((c) => c.function?.arguments ?? "").join("")).toBe('{"path":"a.ts"}');
+
+    // An agent loop branches on this. "stop" ends the turn; "tool_calls" means
+    // run them and come back.
+    expect(finish).toBe("tool_calls");
+  });
+
   it("forwards a thinking model's reasoning as reasoning, not as the answer", async () => {
     respond = (_p, res) => {
       res.writeHead(200, { "content-type": "text/event-stream" });

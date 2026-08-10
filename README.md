@@ -68,6 +68,23 @@ Forwarded verbatim to the model server: `tools`, `tool_choice`, `temperature`,
 `max_tokens` to bound cost, gets it — the gateway has no opinion on sampling
 and must not silently substitute its own.
 
+### Testing against a real model
+
+Unit tests use fakes, which cannot catch a wire-format bug: a stub echoes the
+shape you already believed in. `test-model/` therefore packs a small real model
+(Qwen3-0.6B, 409 MB) behind llama-swap exactly as the production fleet is
+packed — weights baked into the image, nothing fetched at run time.
+
+```bash
+./scripts/e2e-real-model.sh    # adapter + a full agent loop through the router
+./scripts/e2e-opencode.sh      # the real opencode CLI, against a running gateway
+```
+
+The first runs the OpenAI SDK through the gateway with tools that genuinely
+read, write and execute in a temp workspace. The second answers the other half
+of the question — whether an actual coding agent, with its own prompt and tool
+schemas, can drive it.
+
 ### Deliberately not included
 
 No platform-side RBAC or user table. No budget enforcement or rate limiting. No built-in chat UI. No log aggregation backend. No alerting — controlDeck exports metrics and Grafana owns alerting. See §3 of the PRD for the full list and the reasoning.

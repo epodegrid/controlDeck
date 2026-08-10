@@ -4,6 +4,31 @@
 
 ### Fixed
 
+- **Tool calls never reached the client.** The router forwarded `tools`
+  upstream, the model made the call, and the response path threw it away: the
+  adapter read only `content` and `reasoning_content`, and `finish_reason` was
+  hardcoded to `"stop"`. Every agent client — opencode, Copilot, anything with
+  a tool loop — saw a model that thought out loud and never touched a file, in
+  both the streaming and non-streaming paths.
+
+  `tool_calls` deltas are now forwarded verbatim while streaming (arguments
+  arrive fragmented, so reassembling them is the client's job), assembled into
+  whole calls for a non-streaming response, counted as generated tokens, and
+  recorded in the audit trail — a tool call is the whole of some turns.
+  `finish_reason` comes from upstream, so `"tool_calls"` reaches the loop that
+  branches on it.
+
+  0.2.0 claimed to fix tool calling; it fixed the request direction only. The
+  test that let this through asserted that sending `tools` "does not break the
+  stream" — true, and worthless.
+
+- **Every upstream error was reported as a capacity failure.** A 400 from the
+  model server — a prompt longer than the context window, most often — came
+  back as `503 replica_unavailable`, which tells a client to retry. opencode
+  re-sent an impossible request nine times with backoff before giving up. A
+  4xx is now `400 invalid_request`; 5xx and dropped connections stay
+  retryable.
+
 - **Every client-side dashboard call went to `localhost:4000`.** Next inlines
   `NEXT_PUBLIC_*` into the client bundle at *build* time, so the value the Helm
   chart sets at run time never reached the browser and the published image
@@ -35,6 +60,29 @@
 - **A write cancelled by navigation was silently lost.** The dashboard toggles
   move optimistically; clicking one and immediately navigating showed the
   change applied and never made it. Those requests are `keepalive` now.
+
+### Added
+
+- **An integration suite against a real model container.** `test-model/` packs
+  Qwen3-0.6B (409 MB, pinned by digest) behind llama-swap exactly as the
+  production fleet is packed — weights baked in, nothing fetched at run time.
+  `./scripts/e2e-real-model.sh` runs the adapter against the container and an
+  agent loop, driven by the official OpenAI SDK, through the router with tools
+  that genuinely read, write and execute in a temp workspace.
+
+  Every bug above needed a real llama-swap to find. Fakes echo the shape you
+  already believed in, and these paths broke precisely where that belief was
+  wrong.
+
+  Qwen3-0.6B was chosen by measurement, not size: it emits real
+  `reasoning_content`, calls tools, and ships a jinja template. Qwen3.5-0.8B
+  produced tool calls in 0 of 8 attempts, and gemma-4-26B-A4B does not load at
+  all under this llama.cpp build (it needs `ctx_other`).
+
+- **`scripts/e2e-opencode.sh`** drives the real opencode CLI against a running
+  gateway and checks it can read a file and write one. Not in CI — it installs
+  opencode over the network — but it is what proves the fix from the client's
+  side rather than the protocol's.
 
 ## 0.4.1
 

@@ -1,3 +1,42 @@
+/**
+ * One `tool_calls` entry from a streaming delta. Arguments arrive in fragments
+ * across many frames, so `function.arguments` is a partial string until the
+ * stream ends — which is why these are forwarded verbatim rather than
+ * interpreted.
+ */
+export type ToolCallDelta = {
+  index?: number;
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+};
+
+/**
+ * An error response from the model backend, with its status preserved.
+ *
+ * The status is the whole point. A 4xx is the caller's request being wrong —
+ * a prompt longer than the context window, most often — and retrying it will
+ * fail identically forever. A 5xx or a dropped connection is the replica
+ * being unwell, which is worth retrying elsewhere. Collapsing both into one
+ * "replica unavailable" told agent clients to retry a request that could never
+ * succeed: opencode re-sent an over-long prompt nine times with backoff before
+ * giving up, and the gateway reported a capacity problem it did not have.
+ */
+export class BackendError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(`Model backend returned ${status}: ${body.slice(0, 300)}`);
+    this.name = "BackendError";
+  }
+
+  /** True when the request itself is at fault and retrying cannot help. */
+  get isCallerError(): boolean {
+    return this.status >= 400 && this.status < 500;
+  }
+}
+
 export type ChatToken = {
   token: string;
   done: boolean;
@@ -7,6 +46,13 @@ export type ChatToken = {
    * caller can render or hide it, and so it is never mistaken for the answer.
    */
   reasoning?: string;
+  /**
+   * Tool calls the model is making. The whole point of an agent client — an
+   * answer without these is a model that appears to refuse to use its tools.
+   */
+  toolCalls?: ToolCallDelta[];
+  /** Upstream's own reason, notably "tool_calls". Present on the done frame. */
+  finishReason?: string | null;
 };
 
 /**
@@ -117,7 +163,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
       // an empty stream — the router turns a throw here into a proper SSE
       // error event / replica_unavailable (PRD §6.6).
       const detail = await res.text().catch(() => "");
-      throw new Error(`Model backend returned ${res.status}: ${detail.slice(0, 300)}`);
+      throw new BackendError(res.status, detail);
     }
     if (!res.body) {
       yield { token: "", done: true };
@@ -125,6 +171,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
+    let finishReason: string | null = null;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -133,7 +180,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (data === "[DONE]") {
-          yield { token: "", done: true };
+          yield { token: "", done: true, finishReason };
           return;
         }
         try {
@@ -142,6 +189,15 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
 
           const token = delta?.content ?? "";
           const reasoning = delta?.reasoning_content ?? "";
+          const toolCalls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : null;
+
+          // Captured for the done frame. An agent client branches on this:
+          // "tool_calls" means run the tools and come back, "stop" means the
+          // turn is over. Reporting "stop" for a turn that made tool calls
+          // ends the loop before it starts.
+          if (typeof parsed.choices?.[0]?.finish_reason === "string") {
+            finishReason = parsed.choices[0].finish_reason;
+          }
 
           // llama-swap's own progress banner, emitted while it loads a model
           // on demand when sendLoadingState is set. It arrives as
@@ -162,14 +218,17 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
           // Reasoning is progress too. Dropping it left a thinking model
           // looking dead to the caller for the whole of its thinking phase,
           // and starved the stall clock of the evidence that it was working.
+          // Forwarded before content, because a frame can legitimately carry
+          // both and the tool call is the part that must not be lost.
+          if (toolCalls) yield { token: "", done: false, toolCalls };
           if (token) yield { token, done: false };
-          else if (reasoning) yield { token: "", done: false, reasoning };
+          else if (reasoning && !toolCalls) yield { token: "", done: false, reasoning };
         } catch {
           // ignore malformed keep-alive lines
         }
       }
     }
-    yield { token: "", done: true };
+    yield { token: "", done: true, finishReason };
   }
 
   async embed(params: { endpointUrl: string; input: string | string[]; model?: string }): Promise<number[][]> {
@@ -182,7 +241,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      throw new Error(`Embedding backend returned ${res.status}: ${detail.slice(0, 300)}`);
+      throw new BackendError(res.status, detail);
     }
     const json = (await res.json()) as { data: Array<{ embedding: number[] }> };
     return json.data.map((d) => d.embedding);
@@ -204,7 +263,7 @@ export class FakeLlamaSwapClient implements LlamaSwapClient {
       await new Promise((r) => setTimeout(r, 15));
       yield { token: word + " ", done: false };
     }
-    yield { token: "", done: true };
+    yield { token: "", done: true, finishReason: "stop" };
   }
 
   async embed(params: { input: string | string[]; model?: string }): Promise<number[][]> {

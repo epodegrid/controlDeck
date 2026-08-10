@@ -15,8 +15,9 @@ import {
 import { computeCost, getCostConfigForModel } from "../../cost/index.js";
 import { isContentLoggingEnabled, recordAuditContent } from "../../audit/index.js";
 import type { KedaClient } from "../../adapters/keda.js";
-import type { LlamaSwapClient } from "../../adapters/llama-swap.js";
-import { statusForError, replicaUnavailable, queueTimeoutError } from "../errors.js";
+import type { LlamaSwapClient, ToolCallDelta } from "../../adapters/llama-swap.js";
+import { BackendError } from "../../adapters/llama-swap.js";
+import { statusForError, replicaUnavailable, queueTimeoutError, invalidRequest } from "../errors.js";
 import type { ChatCompletionRequest, StandardError } from "../../types.js";
 import { createAuthPreHandler } from "../auth-middleware.js";
 import { affinityKeyFor } from "../../scheduler/affinity.js";
@@ -35,6 +36,59 @@ async function failRequest(requestId: string, err: StandardError, replicaId: str
   if (replicaId) {
     await pool.query(`UPDATE replicas SET in_flight = GREATEST(0, in_flight - 1) WHERE id = $1`, [replicaId]);
   }
+}
+
+/**
+ * Reassembles streamed tool-call fragments into whole calls.
+ *
+ * Upstream streams a tool call across many frames: the first carries the id,
+ * type and function name, and the rest append fragments of the JSON argument
+ * string. A non-streaming caller expects one finished object per call, so the
+ * fragments are joined by `index` — never parsed here, because a partial
+ * argument string is not valid JSON until the last fragment lands.
+ */
+function assembleToolCalls(deltas: ToolCallDelta[]): unknown[] {
+  const byIndex = new Map<number, { id?: string; type: string; function: { name: string; arguments: string } }>();
+  for (const d of deltas) {
+    const i = d.index ?? 0;
+    const existing = byIndex.get(i) ?? { type: "function", function: { name: "", arguments: "" } };
+    if (d.id) existing.id = d.id;
+    if (d.type) existing.type = d.type;
+    if (d.function?.name) existing.function.name = d.function.name;
+    if (d.function?.arguments) existing.function.arguments += d.function.arguments;
+    byIndex.set(i, existing);
+  }
+  return [...byIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+}
+
+/**
+ * What §6.8 records as the response. Tool calls are the response when a turn
+ * makes them — leaving them out would log an empty completion for exactly the
+ * requests an audit is most likely to be asked about.
+ */
+function auditBody(reasoning: string, text: string, toolCalls: unknown[]): string {
+  const parts: string[] = [];
+  if (reasoning) parts.push(reasoning);
+  if (text) parts.push(text);
+  if (toolCalls.length > 0) parts.push(JSON.stringify({ tool_calls: toolCalls }));
+  return parts.join("\n\n");
+}
+
+/**
+ * Turns a backend failure into the error the caller should actually see.
+ *
+ * A 4xx from the model server is the request's fault and no amount of retrying
+ * or rerouting will change it, so it must not be dressed up as a capacity
+ * problem — clients treat 503 as "try again" and will hammer the gateway with
+ * a request that cannot succeed.
+ */
+function backendFailure(err: unknown): StandardError {
+  if (err instanceof BackendError && err.isCallerError) {
+    return invalidRequest(err.message);
+  }
+  return replicaUnavailable(
+    err instanceof Error ? err.message : "Generation failed unexpectedly."
+  );
 }
 
 async function waitForPlacement(
@@ -179,6 +233,11 @@ export function registerV1Routes(
       let outputTokens = 0;
       let fullText = "";
       let fullReasoning = "";
+      // Accumulated only for the audit trail; the deltas themselves are
+      // forwarded live, since a client cannot act on a tool call it is
+      // still waiting for.
+      const toolCallLog: unknown[] = [];
+      let upstreamFinish: string | null = null;
 
       // The spec opens a stream with the assistant role, which is how a client
       // knows which message the deltas belong to.
@@ -199,12 +258,16 @@ export function registerV1Routes(
           systemPrompt: model.systemPrompt,
           ...sampling,
         })) {
-          if (chunk.done) break;
+          if (chunk.done) {
+            upstreamFinish = chunk.finishReason ?? null;
+            break;
+          }
           // Reasoning tokens are generated tokens: they cost compute, they
           // keep the stall clock alive, and OpenAI bills them. Counting only
           // the answer would understate a thinking model's real cost.
           outputTokens += 1;
-          if (chunk.reasoning) fullReasoning += chunk.reasoning;
+          if (chunk.toolCalls) toolCallLog.push(...chunk.toolCalls);
+          else if (chunk.reasoning) fullReasoning += chunk.reasoning;
           else fullText += chunk.token;
           await recordTokenEmitted(requestId);
           const sse = {
@@ -215,9 +278,15 @@ export function registerV1Routes(
             choices: [
               {
                 index: 0,
-                delta: chunk.reasoning
-                  ? { reasoning_content: chunk.reasoning }
-                  : { content: chunk.token },
+                // Forwarded verbatim. Tool-call arguments arrive in fragments
+                // across frames, so the client reassembles them exactly as it
+                // would from OpenAI — anything cleverer here would corrupt a
+                // partial JSON string.
+                delta: chunk.toolCalls
+                  ? { tool_calls: chunk.toolCalls }
+                  : chunk.reasoning
+                    ? { reasoning_content: chunk.reasoning }
+                    : { content: chunk.token },
                 finish_reason: null,
               },
             ],
@@ -230,7 +299,18 @@ export function registerV1Routes(
             object: "chat.completion.chunk",
             created,
             model: model.id,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            // Upstream's own reason, not a guess. An agent client branches on
+            // this: "tool_calls" means run the tools and come back. Reporting
+            // "stop" for a turn that made tool calls ends the loop before it
+            // starts, which looks exactly like a model refusing to use its
+            // tools.
+            choices: [
+              {
+                index: 0,
+                delta: {},
+                finish_reason: upstreamFinish ?? (toolCallLog.length > 0 ? "tool_calls" : "stop"),
+              },
+            ],
           })}\n\n`
         );
         reply.raw.write("data: [DONE]\n\n");
@@ -246,12 +326,13 @@ export function registerV1Routes(
           await recordAuditContent(
             requestId,
             promptText,
-            fullReasoning ? `${fullReasoning}\n\n${fullText}` : fullText
+            auditBody(fullReasoning, fullText, toolCallLog)
           );
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : "Stream failed unexpectedly.";
-        const sseErr: StandardError = { error: { type: "capacity_error", code: "replica_unavailable", message } };
+        // Classified the same way as the non-streaming path: a caller error
+        // must not reach the client as a retryable capacity failure.
+        const sseErr = backendFailure(err);
         reply.raw.write(`data: ${JSON.stringify(sseErr)}\n\n`);
         await failRequest(requestId, sseErr, placement.replicaId);
       } finally {
@@ -264,6 +345,8 @@ export function registerV1Routes(
     let outputTokens = 0;
     let fullText = "";
     let fullReasoning = "";
+    const toolCallDeltas: ToolCallDelta[] = [];
+    let upstreamFinish: string | null = null;
     try {
       for await (const chunk of deps.llamaSwap.streamChat({
         endpointUrl: targetUrl,
@@ -271,20 +354,24 @@ export function registerV1Routes(
         systemPrompt: model.systemPrompt,
         ...sampling,
       })) {
-        if (chunk.done) break;
+        if (chunk.done) {
+          upstreamFinish = chunk.finishReason ?? null;
+          break;
+        }
         outputTokens += 1;
-        if (chunk.reasoning) fullReasoning += chunk.reasoning;
+        if (chunk.toolCalls) toolCallDeltas.push(...chunk.toolCalls);
+        else if (chunk.reasoning) fullReasoning += chunk.reasoning;
         else fullText += chunk.token;
         await recordTokenEmitted(requestId);
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Generation failed unexpectedly.";
-      const failErr = replicaUnavailable(message);
+      const failErr = backendFailure(err);
       await failRequest(requestId, failErr, placement.replicaId);
       reply.code(statusForError(failErr)).send(failErr);
       return;
     }
 
+    const toolCalls = assembleToolCalls(toolCallDeltas);
     const costConfig = (await getCostConfigForModel(model.id)) ?? { costValue: model.costValue, costBasis: model.costBasis };
     const durationMs = Date.now() - startedAt;
     const inputTokens = Math.ceil(promptText.length / 4);
@@ -293,12 +380,12 @@ export function registerV1Routes(
     await completeRequest(requestId, { outputTokens, costUsd });
 
     if (await isContentLoggingEnabled({ team: identity.team, modelId: model.id })) {
+      // Reasoning and tool calls are model output under §6.8 too — reasoning
+      // can restate the prompt, and a tool call is the whole of some turns.
       await recordAuditContent(
         requestId,
         promptText,
-        // Reasoning is model output under §6.8 too — it can restate the prompt
-        // and is exactly what a content-logging scope exists to capture.
-        fullReasoning ? `${fullReasoning}\n\n${fullText}` : fullText
+        auditBody(fullReasoning, fullText, assembleToolCalls(toolCallDeltas))
       );
     }
 
@@ -312,12 +399,16 @@ export function registerV1Routes(
           index: 0,
           message: {
             role: "assistant",
-            content: fullText,
-            // Only present when the model actually produced reasoning, so an
-            // ordinary model's response shape is unchanged.
+            // null, not "", when the turn is only tool calls — that is the
+            // shape the OpenAI schema specifies and what clients check.
+            content: fullText || (toolCalls.length > 0 ? null : ""),
+            // Only present when the model actually produced them, so an
+            // ordinary response's shape is unchanged.
             ...(fullReasoning ? { reasoning_content: fullReasoning } : {}),
+            ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
           },
-          finish_reason: "stop",
+          finish_reason:
+            upstreamFinish ?? (toolCalls.length > 0 ? "tool_calls" : "stop"),
         },
       ],
       usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens },

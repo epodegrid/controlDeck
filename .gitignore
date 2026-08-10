@@ -1,59 +1,49 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
-node_modules
-/.pnp
-.pnp.*
-.yarn/*
+!.env.example
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
+# Production Folders (never committed)
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# cluster cannot reach a chart repository at install time, so KEDA has to ship
 # compiled server output
-server/dist/
-
-# misc
-.DS_Store
-*.pem
-
 # debug
+# dependencies
+# env files — real ones stay local, the documented template is committed
+# helm — the lock and the vendored subchart are both committed. An air-gapped
+# in the tree rather than be fetched by `helm dependency update` on the way in.
+# misc
+# next.js
+# playwright
+# production
+# testing
+# typescript
+# vercel
+*.pem
+*.tsbuildinfo
+.DS_Store
+.claude
+.env*
+.pnp.*
+.pnpm-debug.log*
+.vercel
+.yarn/*
+/.next/
+/.playwright-mcp/
+/.pnp
+/blob-report/
+/build
+/coverage
+/out/
+/playwright-report/
+/test-results/
+deployment/test-model/models/
+next-env.d.ts
+node_modules
 npm-debug.log*
+production/
+server/dist/
+test-model/models/
 yarn-debug.log*
 yarn-error.log*
-.pnpm-debug.log*
-
-# env files — real ones stay local, the documented template is committed
-.env*
-!.env.example
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-.claude
-# playwright
-/test-results/
-/playwright-report/
-/blob-report/
-/.playwright-mcp/
-
-# helm — the lock and the vendored subchart are both committed. An air-gapped
-# cluster cannot reach a chart repository at install time, so KEDA has to ship
-# in the tree rather than be fetched by `helm dependency update` on the way in.
-
-# Production Folders (never committed)
-production/
-deployment/
