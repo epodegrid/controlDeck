@@ -16,7 +16,7 @@ import { computeCost, getCostConfigForModel } from "../../cost/index.js";
 import { isContentLoggingEnabled, recordAuditContent } from "../../audit/index.js";
 import type { KedaClient } from "../../adapters/keda.js";
 import type { LlamaSwapClient, ToolCallDelta } from "../../adapters/llama-swap.js";
-import { BackendError } from "../../adapters/llama-swap.js";
+import { BackendError, buildChatRequestBody } from "../../adapters/llama-swap.js";
 import { statusForError, replicaUnavailable, queueTimeoutError, invalidRequest } from "../errors.js";
 import type { ChatCompletionRequest, StandardError } from "../../types.js";
 import { createAuthPreHandler } from "../auth-middleware.js";
@@ -155,6 +155,43 @@ export function registerV1Routes(
     if (!selection.ok) {
       reply.code(statusForError(selection.error)).send(selection.error);
       return;
+    }
+
+    // ?dry_run=1 — return the exact body that would be sent upstream, and send
+    // nothing. No request row, no placement, no cost.
+    //
+    // "Is the gateway dropping my system prompt, or is the model ignoring it?"
+    // has twice needed a packet capture between the router and the backend to
+    // answer. The gateway knows, and can simply say. It returns only what the
+    // caller themselves just sent, plus the platform's own additions, so it
+    // exposes nothing they do not already have.
+    if ((request.query as { dry_run?: string })?.dry_run) {
+      const selectedModel = candidates.find((m) => m.id === selection.modelId)!;
+      return {
+        object: "controldeck.dry_run",
+        routed_model: selectedModel.id,
+        upstream: {
+          url: `${selectedModel.endpointUrl}/v1/chat/completions`,
+          system_prompt_mode: selectedModel.systemPromptMode,
+          body: buildChatRequestBody({
+            endpointUrl: selectedModel.endpointUrl,
+            model: selectedModel.upstreamModel,
+            systemPrompt: selectedModel.systemPrompt,
+            systemPromptMode: selectedModel.systemPromptMode,
+            messages: body.messages,
+            tools: body.tools,
+            toolChoice: body.tool_choice,
+            temperature: body.temperature,
+            topP: body.top_p,
+            maxTokens: body.max_tokens,
+            stop: body.stop,
+            seed: body.seed,
+            presencePenalty: body.presence_penalty,
+            frequencyPenalty: body.frequency_penalty,
+            responseFormat: body.response_format,
+          }),
+        },
+      };
     }
 
     const requestId = randomUUID();

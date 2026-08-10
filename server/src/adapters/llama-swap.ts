@@ -130,6 +130,69 @@ export interface LlamaSwapClient {
 }
 
 /**
+ * Builds the exact request body sent to the model server.
+ *
+ * Extracted so the dry-run diagnostic returns the same bytes the real path
+ * sends, rather than a reconstruction that can drift from it. "Is the gateway
+ * dropping my system prompt, or is the model ignoring it?" has needed a packet
+ * capture to answer twice now; it should need one curl.
+ */
+export function buildChatRequestBody(params: StreamChatParams): Record<string, unknown> {
+  // PRD §6.11 — the per-model system prompt is a *default*, not an override.
+  // If the caller sent their own system message we leave it authoritative
+  // and inject nothing.
+  //
+  // Agent tools (opencode, Copilot, Hermes and friends) send a carefully
+  // built system prompt describing their tools and output contract. Prefixing
+  // the operator's default in front of it gives the model two sets of
+  // instructions, and the platform's — being first — tends to win in most
+  // chat templates. That breaks the caller's tool loop in ways that look like
+  // the model misbehaving.
+  //
+  // `developer` counts too: it is what OpenAI's reasoning models use in place
+  // of `system`, so a client targeting those would otherwise get the default
+  // injected alongside its own instructions.
+  //
+  // Whitespace-only content does not count. A client that sends
+  // `{role: "system", content: ""}` as a placeholder has expressed no
+  // intention, and honouring it would silently discard the operator's
+  // configured prompt.
+  const callerSetSystemPrompt = params.messages.some(
+    (m) =>
+      (m.role === "system" || m.role === "developer") &&
+      (typeof m.content === "string" ? m.content.trim() !== "" : m.content != null)
+  );
+  const messages =
+    params.systemPrompt && !callerSetSystemPrompt
+      ? [{ role: "system", content: params.systemPrompt }, ...params.messages]
+      : params.messages;
+
+  const outgoing =
+    params.systemPromptMode === "merge" ? mergeSystemIntoFirstUser(messages) : messages;
+
+  return {
+    ...(params.model ? { model: params.model } : {}),
+    messages: outgoing,
+    stream: true,
+    // §6.12 is explicit that tool calling is a pass-through of the
+    // backend's own handling. Dropping these was silently worse than
+    // rejecting them: the router filters on the `tools` capability and
+    // routes to a model that supports them, then removes the tools, so the
+    // caller gets a plain answer and no indication why.
+    ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
+    ...(params.toolChoice !== undefined ? { tool_choice: params.toolChoice } : {}),
+    ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
+    ...(params.topP !== undefined ? { top_p: params.topP } : {}),
+    ...(params.maxTokens !== undefined ? { max_tokens: params.maxTokens } : {}),
+    ...(params.stop !== undefined ? { stop: params.stop } : {}),
+    ...(params.seed !== undefined ? { seed: params.seed } : {}),
+    ...(params.presencePenalty !== undefined ? { presence_penalty: params.presencePenalty } : {}),
+    ...(params.frequencyPenalty !== undefined ? { frequency_penalty: params.frequencyPenalty } : {}),
+    ...(params.responseFormat !== undefined ? { response_format: params.responseFormat } : {}),
+  };
+}
+
+/**
  * Real client talks to a llama-swap instance's OpenAI-compatible HTTP surface.
  * Not exercised in tests/local dev without a live model backend — use
  * FakeLlamaSwapClient (below) when USE_FAKE_ADAPTERS=true.
@@ -145,61 +208,12 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
   }
 
   async *streamChat(params: StreamChatParams): AsyncGenerator<ChatToken> {
-    // PRD §6.11 — the per-model system prompt is a *default*, not an override.
-    // If the caller sent their own system message we leave it authoritative
-    // and inject nothing.
-    //
-    // Agent tools (opencode, Copilot, Hermes and friends) send a carefully
-    // built system prompt describing their tools and output contract. Prefixing
-    // the operator's default in front of it gives the model two sets of
-    // instructions, and the platform's — being first — tends to win in most
-    // chat templates. That breaks the caller's tool loop in ways that look like
-    // the model misbehaving.
-    //
-    // `developer` counts too: it is what OpenAI's reasoning models use in place
-    // of `system`, so a client targeting those would otherwise get the default
-    // injected alongside its own instructions.
-    //
-    // Whitespace-only content does not count. A client that sends
-    // `{role: "system", content: ""}` as a placeholder has expressed no
-    // intention, and honouring it would silently discard the operator's
-    // configured prompt.
-    const callerSetSystemPrompt = params.messages.some(
-      (m) =>
-        (m.role === "system" || m.role === "developer") &&
-        (typeof m.content === "string" ? m.content.trim() !== "" : m.content != null)
-    );
-    const messages =
-      params.systemPrompt && !callerSetSystemPrompt
-        ? [{ role: "system", content: params.systemPrompt }, ...params.messages]
-        : params.messages;
-
-    const outgoing =
-      params.systemPromptMode === "merge" ? mergeSystemIntoFirstUser(messages) : messages;
+    const requestBody = buildChatRequestBody(params);
 
     const res = await fetch(`${params.endpointUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...(params.model ? { model: params.model } : {}),
-        messages: outgoing,
-        stream: true,
-        // §6.12 is explicit that tool calling is a pass-through of the
-        // backend's own handling. Dropping these was silently worse than
-        // rejecting them: the router filters on the `tools` capability and
-        // routes to a model that supports them, then removes the tools, so the
-        // caller gets a plain answer and no indication why.
-        ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
-        ...(params.toolChoice !== undefined ? { tool_choice: params.toolChoice } : {}),
-        ...(params.temperature !== undefined ? { temperature: params.temperature } : {}),
-        ...(params.topP !== undefined ? { top_p: params.topP } : {}),
-        ...(params.maxTokens !== undefined ? { max_tokens: params.maxTokens } : {}),
-        ...(params.stop !== undefined ? { stop: params.stop } : {}),
-        ...(params.seed !== undefined ? { seed: params.seed } : {}),
-        ...(params.presencePenalty !== undefined ? { presence_penalty: params.presencePenalty } : {}),
-        ...(params.frequencyPenalty !== undefined ? { frequency_penalty: params.frequencyPenalty } : {}),
-        ...(params.responseFormat !== undefined ? { response_format: params.responseFormat } : {}),
-      }),
+      body: JSON.stringify(requestBody),
     });
     if (!res.ok) {
       // Surface the backend's standardized error instead of silently yielding

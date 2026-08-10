@@ -44,6 +44,47 @@ afterAll(async () => {
 });
 
 describe("HTTP API", () => {
+  it("dry_run returns the exact upstream body without calling the model", async () => {
+    // The question this answers — "is the gateway dropping my system prompt, or
+    // is the model ignoring it?" — has twice needed a packet capture between
+    // the router and the backend. The gateway knows and can say.
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions?dry_run=1",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        model: "kestrel-9b",
+        messages: [
+          { role: "system", content: "You are opencode." },
+          { role: "user", content: "hi" },
+        ],
+        tools: [{ type: "function", function: { name: "read_file" } }],
+        temperature: 0.3,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const out = JSON.parse(res.body);
+    expect(out.object).toBe("controldeck.dry_run");
+
+    // The caller's system message survives, and the platform default is not
+    // prepended on top of it.
+    const systems = out.upstream.body.messages.filter((m: any) => m.role === "system");
+    expect(systems).toHaveLength(1);
+    expect(systems[0].content).toBe("You are opencode.");
+
+    // Everything else the backend needs is there too.
+    expect(out.upstream.body.tools).toHaveLength(1);
+    expect(out.upstream.body.temperature).toBe(0.3);
+    expect(out.upstream.url).toContain("/v1/chat/completions");
+
+    // And nothing was recorded: a dry run is not traffic.
+    const { rows } = await getPool().query(
+      `SELECT count(*)::int AS n FROM requests WHERE caller_oid = 'http-test-oid' AND status = 'queued'`
+    );
+    expect(rows[0].n).toBe(0);
+  });
+
   it("forwards tools[] to the backend rather than silently dropping them", async () => {
     // §6.12 requires tool calling to be a pass-through. The router filters on
     // the `tools` capability and routes accordingly, so dropping the tools

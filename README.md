@@ -68,6 +68,27 @@ Forwarded verbatim to the model server: `tools`, `tool_choice`, `temperature`,
 `max_tokens` to bound cost, gets it — the gateway has no opinion on sampling
 and must not silently substitute its own.
 
+### Is the gateway or the model at fault?
+
+Append `?dry_run=1` to a chat completion. The gateway returns the exact body it
+would send upstream and calls nothing — no request row, no placement, no cost:
+
+```bash
+curl -s -X POST "$GATEWAY/v1/chat/completions?dry_run=1" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"model":"eve","messages":[{"role":"system","content":"Your name is ZEBRAFISH."},
+       {"role":"user","content":"Who are you?"}]}' | jq .upstream.body
+```
+
+If the system message is in that body and the model still ignores it, the
+gateway is doing its job and the chat template is dropping it — see
+`systemPromptMode` above. If it is missing, it is ours.
+
+It exists because that question has twice needed a packet capture between the
+router and the backend to answer, which is not something a platform holding the
+credentials should require. It returns only what the caller just sent plus the
+platform's own additions.
+
 ### Testing against a real model
 
 Unit tests use fakes, which cannot catch a wire-format bug: a stub echoes the

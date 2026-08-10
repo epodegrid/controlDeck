@@ -1,6 +1,6 @@
 {
   "name": "@controldeck/mock-oidc",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": true,
   "type": "module",
   "description": "Dependency-free Entra-shaped OIDC provider for testing the dashboard sign-in flow without a tenant.",

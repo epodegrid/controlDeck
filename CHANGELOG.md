@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.4
+
+### Added
+
+- **`?dry_run=1` on `/v1/chat/completions`.** Returns the exact body the gateway
+  would send upstream and calls nothing — no request row, no placement, no
+  cost. Built from the same function the real path uses, so it cannot drift
+  into describing something the gateway does not send.
+
+  "Is the gateway dropping my system prompt, or is the model ignoring it?" has
+  now twice needed a packet capture between the router and the backend to
+  answer. The gateway knows, and should simply say. It returns only what the
+  caller themselves just sent, plus the platform's own additions.
+
 ## 0.5.3
 
 ### Added
