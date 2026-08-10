@@ -27,6 +27,9 @@ spec:
       app.kubernetes.io/part-of: controldeck
   policyTypes:
     - Ingress
+    {{- if .Values.networkPolicy.egress.enabled }}
+    - Egress
+    {{- end }}
   ingress:
     # Within the release: router → model replicas, dashboard → router,
     # everything → Postgres.
@@ -59,4 +62,45 @@ spec:
     {{- with .Values.networkPolicy.extraIngress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+  {{- if .Values.networkPolicy.egress.enabled }}
+  # Needed only where the cluster's deny-all also covers egress. Without these
+  # the router cannot reach Postgres, its model replicas, or the Kubernetes API
+  # — it crash-loops on start-up and the rollout never completes, which looks
+  # like an image or config fault rather than a network one.
+  egress:
+    # DNS. The first thing a deny-all breaks and the least obvious: every
+    # Service name stops resolving, which surfaces as "no such host" rather
+    # than as a network problem.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Within the release: router → Postgres, router → model replicas.
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: controldeck
+    {{- with .Values.networkPolicy.egress.apiServer }}
+    # The Kubernetes API, for pod discovery, pod logs and scaling status.
+    #
+    # NetworkPolicy is evaluated *after* DNAT, so this cannot be written as the
+    # kubernetes Service ClusterIP on 443 — it has to be the real endpoint
+    # behind it. Find yours with `kubectl get endpoints kubernetes -n default`.
+    # Allowing 443 alone silently does nothing.
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ .port }}
+    {{- end }}
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
 {{- end }}

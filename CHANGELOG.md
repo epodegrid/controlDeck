@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The NetworkPolicy selected no pods.** It matched
+  `app.kubernetes.io/part-of: controldeck`, which was on the Deployments but
+  never on the pod templates — and a policy matching nothing silently allows
+  nothing, which under a default-deny cluster is indistinguishable from having
+  written no policy at all. The label is now on every pod the chart creates.
+
+- **The NetworkPolicy covered ingress only.** Where the cluster's deny-all also
+  denies egress, the router cannot reach Postgres, its replicas or the
+  Kubernetes API; it crash-loops on start-up and the rollout never completes,
+  which reads as an image or config fault rather than a network one.
+  `networkPolicy.egress.enabled` adds the matching rules.
+
+### Added
+
+- **`docs/networkpolicy-keda.yaml`**, the KEDA side of the same problem.
+  Verified end to end on minikube with Calico: with deny-all in both namespaces
+  the external-metrics APIService goes `Available=False` and every HPA reads
+  `<unknown>`. Four separate hops have to be opened, and each one alone leaves
+  the identical symptom — kube-apiserver→metrics apiserver, metrics
+  apiserver→operator over gRPC, KEDA→router, and router→its own dependencies.
+
+  Two things that make this hard to get right are documented where they bite:
+  Kubernetes evaluates policy *after* DNAT, so allowing egress to the API
+  server on 443 does nothing (it has to be the real endpoint address and port),
+  and Calico does not tear down established connections — KEDA kept working for
+  minutes after deny-all landed and only broke when its pods restarted, so "it
+  still works" immediately after an apply proves nothing.
+
 ## 0.5.0
 
 Everything an agent client needs, and the means to diagnose autoscaling without

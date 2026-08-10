@@ -151,6 +151,18 @@ networkPolicy:
   ingressControllerNamespace: ingress-nginx
   # Anything else, appended verbatim to the ingress rules.
   extraIngress: []
+  # Egress rules, for a deny-all that covers egress as well as ingress. Without
+  # these the router cannot reach Postgres, its replicas or the Kubernetes API,
+  # and crash-loops on start-up.
+  egress:
+    enabled: false
+    # The real Kubernetes API endpoint, not the Service ClusterIP: policy is
+    # evaluated after DNAT, so allowing 443 does nothing. From
+    #   kubectl get endpoints kubernetes -n default
+    apiServer: {}
+    #  cidr: 10.0.0.1/32
+    #  port: 443
+  extraEgress: []
 
 # Postgres is deployed by this chart from the official image rather than by a
 # third-party subchart — see templates/postgres.yaml for why.

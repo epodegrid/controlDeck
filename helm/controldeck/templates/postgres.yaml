@@ -56,6 +56,11 @@ spec:
   template:
     metadata:
       labels:
+        # part-of is on the pod, not only on the Deployment: a NetworkPolicy
+        # selects pods, and one that matches nothing silently allows nothing —
+        # which under a default-deny cluster is indistinguishable from having
+        # written no policy at all.
+        app.kubernetes.io/part-of: controldeck
         app.kubernetes.io/component: postgres
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:

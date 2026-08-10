@@ -1,0 +1,100 @@
+# Allow rules for the KEDA namespace, under a default-deny cluster.
+#
+#   kubectl apply -n keda -f docs/networkpolicy-keda.yaml
+#
+# controlDeck's own chart (networkPolicy.enabled) opens the last hop —
+# KEDA reaching the router — but that is not the hop that breaks first. Under a
+# deny-all policy the metrics apiserver stops being reachable by the Kubernetes
+# API server itself, and the aggregated APIService goes Available=False. Every
+# KEDA HPA in the cluster then reads <unknown>, whatever any other namespace
+# allows. This file fixes the KEDA side; apply it first.
+#
+# Verified end to end on minikube with Calico. With deny-all in both namespaces
+# the APIService went Available=False and every HPA read <unknown>; applying
+# these rules plus the chart's own (networkPolicy.enabled, and
+# networkPolicy.egress.enabled where the deny-all covers egress) brought it back
+# to a real reading. Four separate hops had to be opened, and each one alone
+# left the same symptom:
+#
+#   kube-apiserver  → metrics apiserver   (else APIService goes False)
+#   metrics apiserver → operator, gRPC    (else HPA <unknown>, APIService fine)
+#   KEDA            → the router          (else HPA <unknown>)
+#   router          → Postgres, replicas, the Kubernetes API
+#                                         (else the router crash-loops)
+#
+# One thing worth knowing before you test this: Calico does not tear down
+# established connections when a policy is applied. KEDA's HTTP keep-alive kept
+# working for several minutes after deny-all landed, and the failure only
+# appeared once its pods restarted — so "it still works" immediately after an
+# apply proves nothing.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keda-allow
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # The Kubernetes API server calls the metrics apiserver to satisfy the
+    # aggregated external.metrics.k8s.io API. On a managed cluster this comes
+    # from the control plane rather than from a pod, so it cannot be expressed
+    # as a namespaceSelector — the port is opened to any source.
+    - ports:
+        - protocol: TCP
+          port: 6443
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9443
+    # Within the namespace: operator, metrics apiserver and webhooks.
+    - from:
+        - podSelector: {}
+  egress:
+    # DNS. The first thing deny-all breaks and the least obvious: without it
+    # KEDA cannot resolve the router's Service name at all, which surfaces as
+    # "no such host" rather than as a network problem.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The Kubernetes API server. KEDA cannot start without it — the operator
+    # and the metrics adapter both fail with "dial tcp <clusterIP>:443: i/o
+    # timeout" and crash-loop, and the APIService never becomes Available.
+    #
+    # The subtlety that makes this rule wrong if you write the obvious version:
+    # NetworkPolicy is evaluated *after* DNAT, so the destination is not the
+    # kubernetes Service ClusterIP on 443 but the real endpoint behind it. On
+    # this test cluster that is 192.168.58.2:8443; on a managed cluster it is
+    # the control-plane address. Find yours with:
+    #
+    #   kubectl get endpoints kubernetes -n default
+    #
+    # and put it here. Allowing 443 alone silently does nothing.
+    - to:
+        - ipBlock:
+            cidr: API_SERVER_IP/32
+      ports:
+        - protocol: TCP
+          port: API_SERVER_PORT
+    # Within the KEDA namespace. The metrics apiserver reaches the operator
+    # over gRPC to fetch scaler values, so without this the APIService is
+    # healthy, KEDA can reach the router, and the HPA still reads <unknown> —
+    # the one hop left that nothing else exercises.
+    - to:
+        - podSelector: {}
+    # The controlDeck router's metric endpoint. Narrow this to your namespace.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cdn
+      ports:
+        - protocol: TCP
+          port: 4000

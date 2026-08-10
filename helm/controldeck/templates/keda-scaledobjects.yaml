@@ -24,6 +24,8 @@ spec:
   template:
     metadata:
       labels:
+        app.kubernetes.io/part-of: controldeck
+        app.kubernetes.io/component: model-replica
         controldeck.io/model-id: {{ .id }}
     spec:
       {{- with $.Values.imagePullSecrets }}
