@@ -220,6 +220,11 @@ spec:
     name: {{ .id }}-replica
   minReplicaCount: {{ .minReplicas }}
   maxReplicaCount: {{ .maxReplicas }}
+  {{- /* `.keda` is optional: every field below has a default, so a model that
+         omits the block entirely is a legitimate declaration. Reading through
+         a missing map is a nil-pointer panic at render time, which fails the
+         whole install with a message that names a field rather than the
+         model. */}}
   {{- if eq (int .minReplicas) 0 }}
   # Both of these apply only to the scale-to-zero path, and KEDA warns on every
   # apply if they are set when minReplicaCount > 0. Emitted only when they mean
@@ -228,11 +233,11 @@ spec:
   # schedule and scale-down is governed by the behavior policies below.
   #
   # pollingInterval: how often KEDA asks the router for the current figure.
-  pollingInterval: {{ .keda.pollingIntervalSeconds | default 15 }}
+  pollingInterval: {{ (.keda | default dict).pollingIntervalSeconds | default 15 }}
   # cooldownPeriod: how long the last replica must stay unneeded before it is
   # removed. Generous, because reloading model weights is expensive and trading
   # idle RAM for not paying that cost repeatedly is the right way round (§6.4).
-  cooldownPeriod: {{ .keda.cooldownSeconds | default 300 }}
+  cooldownPeriod: {{ (.keda | default dict).cooldownSeconds | default 300 }}
   {{- end }}
   triggers:
     - type: metrics-api
@@ -248,7 +253,7 @@ spec:
         # match what the replica can actually serve concurrently — one, for a
         # generation-bound model — or the fleet is sized wrongly in whichever
         # direction the number is off.
-        targetValue: "{{ .keda.requestsPerReplica | default 1 }}"
+        targetValue: "{{ (.keda | default dict).requestsPerReplica | default 1 }}"
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
@@ -263,16 +268,16 @@ spec:
           stabilizationWindowSeconds: 0
           policies:
             - type: Pods
-              value: {{ .keda.scaleUpPods | default 1 }}
-              periodSeconds: {{ .keda.scaleUpPeriodSeconds | default 30 }}
+              value: {{ (.keda | default dict).scaleUpPods | default 1 }}
+              periodSeconds: {{ (.keda | default dict).scaleUpPeriodSeconds | default 30 }}
         scaleDown:
           # Slow on the way down. Reloading weights is the expensive operation,
           # and an idle replica costs little but RAM on this cost model (§6.4),
           # so the asymmetry is deliberate.
-          stabilizationWindowSeconds: {{ .keda.scaleDownStabilizationSeconds | default 300 }}
+          stabilizationWindowSeconds: {{ (.keda | default dict).scaleDownStabilizationSeconds | default 300 }}
           policies:
             - type: Pods
-              value: {{ .keda.scaleDownPods | default 1 }}
-              periodSeconds: {{ .keda.scaleDownPeriodSeconds | default 60 }}
+              value: {{ (.keda | default dict).scaleDownPods | default 1 }}
+              periodSeconds: {{ (.keda | default dict).scaleDownPeriodSeconds | default 60 }}
 {{- end }}
 {{- end }}

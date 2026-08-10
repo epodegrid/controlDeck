@@ -4,6 +4,39 @@
 
 ### Fixed
 
+- **CPU, memory and restart count were hardcoded placeholders.** The monitoring
+  view showed "—" with "requires K8s metrics API, not wired in this build", and
+  two thirds of that was wrong: restart count comes straight off the pod object
+  the reconciler already fetches, and CPU/memory need `metrics.k8s.io`, which
+  AKS installs by default. All three are now read per replica. Verified in a
+  cluster against `kubectl top` (2m / 31Mi) and by killing a container at the
+  runtime level to watch the restart count propagate.
+
+  CPU and memory stay null where metrics-server is absent, and the panel says
+  so — a zero would read as an idle replica, which is a different claim.
+
+- **The hourly distribution chart rendered nothing.** Every bar carried a
+  correct inline `height: 40%` and computed to 0 pixels: a percentage height
+  resolves against the parent's height, and the column wrapping the bars had
+  none. The data, the query and the styles were all fine and the chart was
+  blank. The regression test asserts rendered geometry, because one that checks
+  the bars exist passes on a chart nobody can see.
+
+- **"Per model" content logging toggled one arbitrary model.** The summary rows
+  were switches bound to `modelScopes[0]` and `teamScopes[0]` while their
+  labels implied they governed all of them, and the expandable breakdown was
+  read-only and teams-only — so scoping content logging to a single model was
+  not possible at all. The summaries are counts now, and every team and model
+  has its own switch.
+
+  Per-API-key scoping remains deliberately inert, labelled "Reserved · not yet
+  active". The backend accepts the scope; nothing issues platform API keys yet.
+
+- **A model without a `keda:` block crashed `helm install`.** Every field in it
+  has a default, so omitting the block is a legitimate declaration — but the
+  template read through the missing map and panicked at render time, failing
+  the whole install with a message naming a field rather than the model.
+
 - **Tool calls never reached the client.** The router forwarded `tools`
   upstream, the model made the call, and the response path threw it away: the
   adapter read only `content` and `reasoning_content`, and `finish_reason` was

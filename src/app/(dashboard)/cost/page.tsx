@@ -178,8 +178,12 @@ export default async function CostPage({ searchParams }: { searchParams: Promise
               const outH = maxHourTokens > 0 ? (h.tokensOut / maxHourTokens) * 100 : 0;
               const label = new Date(h.hour).toLocaleTimeString([], { hour: "2-digit" });
               return (
-                <div key={h.hour + i} className="flex-1 flex flex-col items-center gap-1 min-w-0">
-                  <div className="w-full flex items-end gap-0.5 h-full">
+                // h-full on the column and flex-1 on the bar row are what make
+                // the bars visible at all: a percentage height resolves against
+                // the parent's height, and this column had none, so every bar
+                // computed to 0px while carrying a correct inline style.
+                <div key={h.hour + i} className="flex-1 flex flex-col items-center gap-1 min-w-0 h-full">
+                  <div className="w-full flex items-end gap-0.5 flex-1 min-h-0">
                     <div
                       className="flex-1 rounded-t bar-grow bg-ink"
                       style={{ height: `${inH}%`, animationDelay: `${i * 40}ms` }}

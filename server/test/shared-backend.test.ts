@@ -103,6 +103,40 @@ describe("aliases sharing one backend", () => {
     expect(viaOwner.map((r: any) => r.id)).toEqual([id("pod-a")]);
   });
 
+  it("reports a replica's resources, and says nothing rather than zero when unknown", async () => {
+    await insertModel(id("eve"));
+    const pool = getPool();
+    // The shape the reconciler writes on a cluster with metrics-server.
+    await pool.query(
+      `INSERT INTO replicas (id, model_id, status, in_flight, load_pct, endpoint_url,
+                             max_concurrency, cpu_millicores, memory_bytes, restart_count)
+       VALUES ($1, $2, 'ready', 0, 0, 'http://pod:8080', 1, 250.5, 68719476736, 3)`,
+      [id("pod-metrics"), id("eve")]
+    );
+    // And without one: null, not zero. A zero reads as an idle replica, which
+    // is a different and wrong claim.
+    await pool.query(
+      `INSERT INTO replicas (id, model_id, status, in_flight, load_pct, endpoint_url,
+                             max_concurrency, restart_count)
+       VALUES ($1, $2, 'ready', 0, 0, 'http://pod2:8080', 1, 0)`,
+      [id("pod-nometrics"), id("eve")]
+    );
+
+    const replicas = await listReplicasForModel(id("eve"));
+    const withMetrics = replicas.find((r: any) => r.id === id("pod-metrics"))!;
+    const without = replicas.find((r: any) => r.id === id("pod-nometrics"))!;
+
+    expect(Number(withMetrics.cpuMillicores)).toBeCloseTo(250.5, 1);
+    expect(Number(withMetrics.memoryBytes)).toBe(68719476736);
+    // Restart count comes off the pod object, so it is always known in-cluster
+    // — it never depended on the metrics API at all.
+    expect(withMetrics.restartCount).toBe(3);
+
+    expect(without.cpuMillicores).toBeNull();
+    expect(without.memoryBytes).toBeNull();
+    expect(without.restartCount).toBe(0);
+  });
+
   it("scales on the combined demand of every name the backend serves", async () => {
     await insertModel(id("eve"));
     await insertModel(id("thinking"), { backendRef: id("eve") });

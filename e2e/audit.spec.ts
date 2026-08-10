@@ -76,6 +76,41 @@ test.describe("audit", () => {
     await toggle.click(); // restore
   });
 
+  test("a per-model scope can be toggled on its own", async ({ page }) => {
+    // The summary rows used to be switches bound to modelScopes[0], so "Per
+    // model" silently toggled whichever model happened to be first and there
+    // was no way to scope one model at all.
+    await page.goto("/audit");
+    await expect(page.getByText("Per-team and per-model scopes")).toBeVisible();
+
+    const modelRow = page
+      .locator("div", { has: page.getByRole("switch") })
+      .filter({ hasText: "kestrel-9b" })
+      .last();
+    const toggle = modelRow.getByRole("switch");
+    await expect(toggle).toBeVisible();
+
+    const before = await toggle.getAttribute("aria-checked");
+    const saved = page.waitForResponse(
+      (r) => r.url().includes("/api/audit/logging-config") && r.request().method() === "PUT"
+    );
+    await toggle.click();
+    expect((await saved).ok()).toBe(true);
+
+    await page.reload();
+    const after = page
+      .locator("div", { has: page.getByRole("switch") })
+      .filter({ hasText: "kestrel-9b" })
+      .last()
+      .getByRole("switch");
+    await expect(after).toHaveAttribute("aria-checked", before === "true" ? "false" : "true");
+
+    // Leave it as found.
+    const restored = page.waitForResponse((r) => r.url().includes("/api/audit/logging-config"));
+    await after.click();
+    await restored;
+  });
+
   test("delete history removes rows and reports how many", async ({ page }) => {
     await page.goto("/audit");
 

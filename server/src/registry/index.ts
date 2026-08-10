@@ -60,7 +60,9 @@ export async function listReplicasForModel(modelId: string) {
   const pool = getPool();
   const res = await pool.query(
     `SELECT r.id, r.model_id AS "modelId", r.status, r.in_flight AS "inFlight",
-       r.load_pct::float8 AS "loadPct", r.tokens_per_sec::float8 AS "tokensPerSec"
+       r.load_pct::float8 AS "loadPct", r.tokens_per_sec::float8 AS "tokensPerSec",
+       r.cpu_millicores::float8 AS "cpuMillicores", r.memory_bytes::float8 AS "memoryBytes",
+       r.restart_count AS "restartCount"
      FROM replicas r
      WHERE r.model_id = COALESCE(
        (SELECT COALESCE(backend_model_id, id) FROM model_registry WHERE id = $1),

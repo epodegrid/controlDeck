@@ -9,6 +9,8 @@
 #               gating to mean anything; without this the router can only see
 #               the Service, behind which every replica is the same address.
 #   pods/log  — the live log tail of PRD §6.10.
+#   metrics   — per-replica CPU and memory. Optional: without metrics-server
+#               the dashboard says so rather than showing a fabricated zero.
 #
 # Namespaced, and read-only. The router never creates, modifies or deletes
 # anything in the cluster: scaling is KEDA's job and deployment is Helm's.
@@ -32,6 +34,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  # CPU and memory per replica. metrics.k8s.io is an add-on rather than part of
+  # Kubernetes — AKS installs it by default — so the router treats its absence
+  # as "no figures available" rather than an error, and this rule is harmless
+  # on a cluster that does not serve it.
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

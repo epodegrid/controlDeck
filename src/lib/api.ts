@@ -37,6 +37,11 @@ export type Replica = {
   inFlight: number;
   loadPct: number;
   tokensPerSec: number | null;
+  /** Null where the cluster has no metrics-server; it is an add-on. */
+  cpuMillicores: number | null;
+  memoryBytes: number | null;
+  /** From the pod object itself, so always present in-cluster. */
+  restartCount: number;
 };
 
 export type ModelWithReplicas = {

@@ -27,6 +27,23 @@ export type DiscoveredPod = {
   endpointUrl: string;
   /** Whether kubelet currently considers the pod ready. */
   ready: boolean;
+  /**
+   * Times the containers in this pod have restarted.
+   *
+   * Straight off the pod we already fetch — no metrics API involved. It is the
+   * cheapest signal there is that a replica is unhealthy in a way readiness
+   * does not show: a model server being OOM-killed mid-generation comes back
+   * Ready a moment later, and the only trace is this number climbing.
+   */
+  restartCount: number;
+};
+
+/** A point-in-time resource sample for one pod, from metrics.k8s.io. */
+export type PodMetrics = {
+  name: string;
+  /** Millicores. 1000 = one core. */
+  cpuMillicores: number;
+  memoryBytes: number;
 };
 
 export function inCluster(): boolean {
@@ -84,7 +101,15 @@ type PodList = {
       podIP?: string;
       phase?: string;
       conditions?: Array<{ type: string; status: string }>;
+      containerStatuses?: Array<{ restartCount?: number }>;
     };
+  }>;
+};
+
+type PodMetricsList = {
+  items: Array<{
+    metadata: { name: string };
+    containers?: Array<{ usage?: { cpu?: string; memory?: string } }>;
   }>;
 };
 
@@ -126,5 +151,87 @@ export async function listModelPods(modelId: string, port = 8080): Promise<Disco
       endpointUrl: `http://${pod.status!.podIP}:${port}`,
       ready:
         pod.status?.conditions?.some((c) => c.type === "Ready" && c.status === "True") ?? false,
+      // Summed across containers: a pod usually has one, and where it has more
+      // the total is the honest answer to "has this replica been restarting".
+      restartCount: (pod.status?.containerStatuses ?? []).reduce(
+        (total, c) => total + (c.restartCount ?? 0),
+        0
+      ),
     }));
+}
+
+/**
+ * Kubernetes quantities are strings with unit suffixes, and CPU in particular
+ * arrives as nanocores from metrics-server ("123456789n") but can be written
+ * "100m" or "2" elsewhere. Parsed rather than assumed, because getting this
+ * wrong produces a number that looks plausible and is off by a thousand.
+ */
+export function parseCpuToMillicores(raw: string | undefined): number {
+  if (!raw) return 0;
+  if (raw.endsWith("n")) return Number(raw.slice(0, -1)) / 1_000_000;
+  if (raw.endsWith("u")) return Number(raw.slice(0, -1)) / 1_000;
+  if (raw.endsWith("m")) return Number(raw.slice(0, -1));
+  return Number(raw) * 1000;
+}
+
+const MEMORY_UNITS: Record<string, number> = {
+  Ki: 1024,
+  Mi: 1024 ** 2,
+  Gi: 1024 ** 3,
+  Ti: 1024 ** 4,
+  K: 1000,
+  M: 1000 ** 2,
+  G: 1000 ** 3,
+  T: 1000 ** 4,
+};
+
+export function parseMemoryToBytes(raw: string | undefined): number {
+  if (!raw) return 0;
+  for (const [suffix, factor] of Object.entries(MEMORY_UNITS)) {
+    if (raw.endsWith(suffix)) return Number(raw.slice(0, -suffix.length)) * factor;
+  }
+  return Number(raw);
+}
+
+/**
+ * Current CPU and memory for the pods of one model, from the metrics API.
+ *
+ * Returns null when metrics-server is not installed, rather than throwing:
+ * it is an add-on, not part of Kubernetes, and a cluster without it is a
+ * cluster where these figures are genuinely unavailable — which the dashboard
+ * should say plainly instead of failing the whole reconcile pass.
+ *
+ * AKS installs it by default, so on the deployment this was built for these
+ * numbers are real.
+ */
+export async function listPodMetrics(modelId: string): Promise<PodMetrics[] | null> {
+  const namespace = await currentNamespace();
+  const selector = encodeURIComponent(`controldeck.io/model-id=${modelId}`);
+  let res: Response;
+  try {
+    res = await apiRequest(
+      `/apis/metrics.k8s.io/v1beta1/namespaces/${namespace}/pods?labelSelector=${selector}`
+    );
+  } catch {
+    return null;
+  }
+
+  // 404 is "metrics-server is not installed"; 403 is "the Role does not grant
+  // metrics.k8s.io". Both mean no figures, neither is worth failing over.
+  if (!res.ok) return null;
+
+  const body = (await res.json().catch(() => null)) as PodMetricsList | null;
+  if (!body?.items) return null;
+
+  return body.items.map((pod) => {
+    // Summed across containers so the number matches the pod as a whole,
+    // which is the unit the dashboard shows.
+    let cpu = 0;
+    let memory = 0;
+    for (const c of pod.containers ?? []) {
+      cpu += parseCpuToMillicores(c.usage?.cpu);
+      memory += parseMemoryToBytes(c.usage?.memory);
+    }
+    return { name: pod.metadata.name, cpuMillicores: cpu, memoryBytes: memory };
+  });
 }

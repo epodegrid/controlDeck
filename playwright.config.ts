@@ -55,7 +55,15 @@ const dashboardEnv = {
   DASHBOARD_ADMIN_ROLE: "Admin",
 };
 
-export const E2E = { TENANT, AUTHORITY, ROUTER_PORT, DASH_PORT };
+// DATABASE_URL is exported so a spec can seed its own fixture rows rather than
+// depending on whatever the shared development database happens to hold.
+export const E2E = {
+  TENANT,
+  AUTHORITY,
+  ROUTER_PORT,
+  DASH_PORT,
+  DATABASE_URL: routerEnv.DATABASE_URL,
+};
 
 export default defineConfig({
   testDir: "./e2e",

@@ -100,9 +100,33 @@ export function MonitoringView({ models, errorSummary }: { models: ModelWithRepl
         `}</style>
 
         <div className="grid grid-cols-3 gap-4">
-          <SmallStat label="CPU" value="—" hint="requires K8s metrics API, not wired in this build" />
-          <SmallStat label="Memory" value="—" hint="requires K8s metrics API, not wired in this build" />
-          <SmallStat label="Restart count" value="—" hint="requires K8s API, not wired in this build" />
+          <SmallStat
+            label="CPU"
+            value={formatCpu(activeReplica?.cpuMillicores ?? null)}
+            hint={
+              activeReplica?.cpuMillicores == null
+                ? "needs metrics-server in the cluster"
+                : "current usage"
+            }
+          />
+          <SmallStat
+            label="Memory"
+            value={formatMemory(activeReplica?.memoryBytes ?? null)}
+            hint={
+              activeReplica?.memoryBytes == null
+                ? "needs metrics-server in the cluster"
+                : "resident"
+            }
+          />
+          <SmallStat
+            label="Restart count"
+            value={activeReplica ? String(activeReplica.restartCount) : "—"}
+            hint={
+              activeReplica && activeReplica.restartCount > 0
+                ? "this replica has restarted"
+                : "since the pod was created"
+            }
+          />
         </div>
 
         <div className="rounded-3xl bg-card shadow-soft-2 p-5">
@@ -131,6 +155,20 @@ export function MonitoringView({ models, errorSummary }: { models: ModelWithRepl
       </section>
     </div>
   );
+}
+
+/** Millicores in, something a person reads out. */
+function formatCpu(millicores: number | null): string {
+  if (millicores == null) return "—";
+  if (millicores < 1000) return `${Math.round(millicores)}m`;
+  return `${(millicores / 1000).toFixed(2)} cores`;
+}
+
+function formatMemory(bytes: number | null): string {
+  if (bytes == null) return "—";
+  const gib = bytes / 1024 ** 3;
+  if (gib >= 1) return `${gib.toFixed(1)} GiB`;
+  return `${Math.round(bytes / 1024 ** 2)} MiB`;
 }
 
 function SmallStat({ label, value, hint }: { label: string; value: string; hint?: string }) {

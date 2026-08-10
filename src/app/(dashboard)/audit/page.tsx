@@ -128,38 +128,36 @@ export default async function AuditPage({
             scopeKey={globalScope?.scopeKey ?? "global"}
             description="Apply to all requests, override-able below"
           />
-          <ScopeRow
+          {/* Summaries, not switches. These were bound to teamScopes[0] and
+              modelScopes[0], so "Per model" silently toggled whichever model
+              happened to be first while the label implied it governed all of
+              them. The real per-scope switches are in the breakdown below. */}
+          <ScopeSummary
             label="Per team"
-            on={teamScopes[0]?.enabled ?? false}
-            scopeType="team"
-            scopeKey={teamScopes[0]?.scopeKey ?? ""}
-            description={`${teamsOnCount}/${teamScopes.length} teams logging content`}
+            on={teamsOnCount}
+            total={teamScopes.length}
+            noun="teams"
           />
-          <ScopeRow
+          <ScopeSummary
             label="Per model"
-            on={modelScopes[0]?.enabled ?? false}
-            scopeType="model"
-            scopeKey={modelScopes[0]?.scopeKey ?? ""}
-            description={`${modelsOnCount}/${modelScopes.length} models logging content`}
+            on={modelsOnCount}
+            total={modelScopes.length}
+            noun="models"
           />
           <ScopeRow label="Per API key" pending description="Reserved · not yet active" scopeType="key" scopeKey="" />
         </div>
 
-        <details className="mt-5 border-t border-gray-1 pt-4 group">
+        <details className="mt-5 border-t border-gray-1 pt-4 group" open>
           <summary className="cursor-pointer text-[12px] text-gray-2 hover:text-ink transition list-none flex items-center gap-2">
             <span className="text-[10px] transition group-open:rotate-90">▶</span>
-            Show per-team breakdown
+            Per-team and per-model scopes
           </summary>
-          <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
-            {teamScopes.map((row) => (
-              <div key={row.scopeKey} className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-1/40 hover:bg-gray-1 transition">
-                <span className="font-mono text-[11px]">{row.scopeKey}</span>
-                <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${row.enabled ? "bg-status-green/15 text-status-green" : "bg-gray-1 text-gray-2"}`}>
-                  {row.enabled ? "ON" : "OFF"}
-                </span>
-              </div>
-            ))}
-          </div>
+
+          {/* Every scope gets its own switch. The breakdown used to be
+              read-only ON/OFF badges, and only for teams — so there was no way
+              to turn content logging on for one model at all. */}
+          <ScopeGrid title="Teams" rows={teamScopes} scopeType="team" emptyHint="No team has sent a request yet, so there is nothing to scope. Teams appear here once traffic arrives carrying the team claim." />
+          <ScopeGrid title="Models" rows={modelScopes} scopeType="model" emptyHint="No models are registered yet." />
         </details>
       </div>
 
@@ -271,6 +269,74 @@ export default async function AuditPage({
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A count, not a control. The per-team and per-model summaries cannot be a
+ * single switch: there is no one scope for them to write to.
+ */
+function ScopeSummary({
+  label,
+  on,
+  total,
+  noun,
+}: {
+  label: string;
+  on: number;
+  total: number;
+  noun: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-3 p-3.5 lift">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[12px] font-medium">{label}</span>
+        <span
+          className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+            on > 0 ? "bg-status-green/15 text-status-green" : "bg-gray-1 text-gray-2"
+          }`}
+        >
+          {on}/{total}
+        </span>
+      </div>
+      <p className="text-[10px] text-gray-2 leading-snug">
+        {total === 0 ? `No ${noun} yet` : `${on} of ${total} ${noun} logging content — set below`}
+      </p>
+    </div>
+  );
+}
+
+/** Per-scope switches, one row per team or model. */
+function ScopeGrid({
+  title,
+  rows,
+  scopeType,
+  emptyHint,
+}: {
+  title: string;
+  rows: LoggingScopeRow[];
+  scopeType: LoggingScopeRow["scopeType"];
+  emptyHint: string;
+}) {
+  return (
+    <div className="mt-4">
+      <p className="text-[10px] uppercase tracking-wider text-gray-2 font-medium mb-2">{title}</p>
+      {rows.length === 0 ? (
+        <p className="text-[11px] text-gray-2 leading-relaxed">{emptyHint}</p>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {rows.map((row) => (
+            <div
+              key={row.scopeKey}
+              className="flex items-center justify-between px-3 py-2 rounded-lg bg-gray-1/40 hover:bg-gray-1 transition"
+            >
+              <span className="font-mono text-[11px] truncate mr-3">{row.scopeKey}</span>
+              <LoggingToggle scopeType={scopeType} scopeKey={row.scopeKey} on={row.enabled} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
