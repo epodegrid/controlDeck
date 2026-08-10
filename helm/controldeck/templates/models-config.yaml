@@ -17,6 +17,11 @@
 #                       platform-level id shown to callers.
 #   port                Used for direct pod-IP discovery, which bypasses the
 #                       Service. Not every backend listens on 8080.
+#   systemPromptMode    "merge" for a chat template with no system role —
+#                       Gemma's has none, so a system message is dropped and
+#                       the model ignores its instructions while every layer
+#                       above reports success. Folds it into the first user
+#                       turn instead. Defaults to "passthrough".
 #   backendRef          Another model whose container serves this one. One
 #                       image commonly answers to several names over the same
 #                       loaded weights; each gets its own entry here, and only
@@ -63,6 +68,7 @@ data:
         "port" ($backend.port | default 8080)
         "firstTokenTimeoutMs" (.firstTokenTimeoutMs | default $backend.firstTokenTimeoutMs | default 600000)
         "backendRef" (.backendRef | default "")
+        "systemPromptMode" (.systemPromptMode | default "passthrough")
     ) }}
     {{- end }}
     {{ dict "models" $models | toJson }}

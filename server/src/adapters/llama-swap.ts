@@ -70,6 +70,13 @@ export type StreamChatParams = {
   model?: string;
   messages: Array<{ role: string; content: unknown }>;
   systemPrompt?: string;
+  /**
+   * `merge` folds system messages into the first user turn. Needed for chat
+   * templates with no system role — Gemma's has none — where the message is
+   * otherwise dropped and the model ignores its instructions while every layer
+   * above reports success.
+   */
+  systemPromptMode?: "passthrough" | "merge";
   /** Forwarded verbatim; llama-swap owns the tool-calling handling (§6.12). */
   tools?: unknown[];
   toolChoice?: unknown;
@@ -82,6 +89,39 @@ export type StreamChatParams = {
   frequencyPenalty?: number;
   responseFormat?: unknown;
 };
+
+/**
+ * Folds system messages into the first user turn.
+ *
+ * For templates that have no system role. Kept as a plain transformation of
+ * the message list rather than a string concatenation at the call site,
+ * because the caller's system prompt can be several thousand tokens and its
+ * ordering relative to the conversation matters.
+ *
+ * `developer` counts as a system message here for the same reason it does
+ * everywhere else: it is what clients targeting OpenAI's reasoning models
+ * send in its place.
+ */
+export function mergeSystemIntoFirstUser(
+  messages: Array<{ role: string; content: unknown }>
+): Array<{ role: string; content: unknown }> {
+  const isSystem = (r: string) => r === "system" || r === "developer";
+  const text = (c: unknown) => (typeof c === "string" ? c : c == null ? "" : JSON.stringify(c));
+
+  const preamble = messages.filter((m) => isSystem(m.role)).map((m) => text(m.content)).join("\n\n");
+  if (!preamble) return messages;
+
+  const rest = messages.filter((m) => !isSystem(m.role));
+  const firstUser = rest.findIndex((m) => m.role === "user");
+
+  // No user turn to merge into — a tools-only or assistant-prefixed exchange.
+  // Prepending one is better than dropping the instructions entirely.
+  if (firstUser === -1) return [{ role: "user", content: preamble }, ...rest];
+
+  return rest.map((m, i) =>
+    i === firstUser ? { ...m, content: `${preamble}\n\n${text(m.content)}` } : m
+  );
+}
 
 export interface LlamaSwapClient {
   checkReady(endpointUrl: string): Promise<boolean>;
@@ -134,12 +174,15 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
         ? [{ role: "system", content: params.systemPrompt }, ...params.messages]
         : params.messages;
 
+    const outgoing =
+      params.systemPromptMode === "merge" ? mergeSystemIntoFirstUser(messages) : messages;
+
     const res = await fetch(`${params.endpointUrl}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         ...(params.model ? { model: params.model } : {}),
-        messages,
+        messages: outgoing,
         stream: true,
         // §6.12 is explicit that tool calling is a pass-through of the
         // backend's own handling. Dropping these was silently worse than

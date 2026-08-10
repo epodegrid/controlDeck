@@ -353,6 +353,15 @@ models:
     modelClass: fast
     capabilities: [chat, tools]
     upstreamModel: wall-e
+    # Gemma's chat template has no system role: it knows only user and model
+    # turns, so a system message is dropped and the model ignores its
+    # instructions — while the gateway forwards it, llama.cpp accepts the
+    # request, and nothing reports a fault. Fold it into the first user turn.
+    #
+    # Check before assuming: send a system prompt with a distinctive
+    # instruction straight to the container and see whether it is obeyed. If it
+    # is, leave this at the default.
+    systemPromptMode: merge
     port: 8080
     firstTokenTimeoutMs: 900000
     # Two resident: this is the model most traffic lands on, and it is cheap

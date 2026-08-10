@@ -43,6 +43,7 @@ function model(overrides: Partial<ModelConfig> = {}): ModelConfig {
     costBasis: "per_1k_tokens",
     endpointUrl: BASE ?? "",
     upstreamModel: "tiny",
+    systemPromptMode: "passthrough",
     backendModelId: "tiny",
     port: 8080,
     firstTokenTimeoutMs: null,

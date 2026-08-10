@@ -16,6 +16,7 @@ function makeModel(overrides: Partial<ModelConfig> = {}): ModelConfig {
     costBasis: "per_1k_tokens",
     endpointUrl: "http://localhost",
     upstreamModel: "fast-1",
+    systemPromptMode: "passthrough" as const,
     backendModelId: "fast-1",
     port: 8080,
     firstTokenTimeoutMs: null,

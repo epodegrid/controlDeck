@@ -210,6 +210,7 @@ export function registerV1Routes(
       // llama-swap routes on this; without it a multi-model container has
       // nothing to select on.
       model: model.upstreamModel,
+      systemPromptMode: model.systemPromptMode,
       temperature: body.temperature,
       topP: body.top_p,
       maxTokens: body.max_tokens,

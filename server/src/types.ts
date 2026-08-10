@@ -71,6 +71,15 @@ export type ModelConfig = {
    * than by `id`, because they are properties of the pod, not of the name.
    */
   backendModelId: string;
+  /**
+   * How the backend wants a system prompt delivered.
+   *
+   * `passthrough` sends the caller's message as written. `merge` folds it into
+   * the first user turn, for chat templates with no system role — Gemma's has
+   * none, and drops the message silently, so the model ignores its
+   * instructions while every layer above reports success.
+   */
+  systemPromptMode: "passthrough" | "merge";
   /** Port the container listens on. Not every backend uses 8080. */
   port: number;
   /**

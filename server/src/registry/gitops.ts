@@ -48,6 +48,8 @@ export type GitOpsModel = {
   backendRef?: string;
   /** Port the container listens on. Defaults to 8080. */
   port?: number;
+  /** `merge` for templates with no system role, e.g. Gemma's. */
+  systemPromptMode?: "passthrough" | "merge";
   /** Allowance for weight loading on the first request. */
   firstTokenTimeoutMs?: number;
 };
@@ -134,8 +136,9 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
         `INSERT INTO model_registry
            (id, name, class_label, model_class, capabilities, min_replicas, max_replicas,
             system_prompt, cost_value, cost_basis, endpoint_url,
-            upstream_model, port, first_token_timeout_ms, backend_model_id, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now())
+            upstream_model, port, first_token_timeout_ms, backend_model_id,
+            system_prompt_mode, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16, now())
          ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name,
            class_label = EXCLUDED.class_label,
@@ -151,6 +154,7 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
            port = EXCLUDED.port,
            first_token_timeout_ms = EXCLUDED.first_token_timeout_ms,
            backend_model_id = EXCLUDED.backend_model_id,
+           system_prompt_mode = EXCLUDED.system_prompt_mode,
            updated_at = now()`,
         [
           model.id,
@@ -170,6 +174,7 @@ export async function syncModelsFromConfig(models: GitOpsModel[]): Promise<SyncR
           model.port ?? 8080,
           model.firstTokenTimeoutMs ?? null,
           model.backendRef ?? null,
+          model.systemPromptMode ?? "passthrough",
         ]
       );
     }

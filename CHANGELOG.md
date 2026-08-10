@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.3
+
+### Added
+
+- **`systemPromptMode: merge`, for chat templates with no system role.** Gemma's
+  has none — it knows only user and model turns — so a system message is
+  dropped and the model ignores its instructions entirely, while every layer
+  above reports success: the gateway forwards it, llama.cpp accepts the
+  request, and nothing anywhere reports a fault. `merge` folds the system
+  message into the first user turn instead, which is how such templates are
+  conventionally fed one.
+
+  Set per model, defaulting to `passthrough`. The worked example turns it on
+  for the Gemma-based model only.
+
+  Worth stating plainly: the gateway was **not** dropping the prompt. Running a
+  real opencode session through a recording proxy showed 9,537 characters of
+  system prompt and all ten tool definitions forwarded intact, which is what
+  narrowed the loss to the template. `developer` messages merge too, since
+  clients targeting OpenAI's reasoning models send that instead.
+
 ## 0.5.2
 
 ### Fixed
