@@ -15,8 +15,15 @@ installs only — it cannot be relied on as a rendering-time check.
 */}}
 {{- $ownedByUs := false }}
 {{- $foundIn := "" }}
-{{- range $ns := list .Release.Namespace "keda" "kube-system" }}
-  {{- $dep := lookup "apps/v1" "Deployment" $ns "keda-operator" }}
+{{- /* Every namespace, not a guessed shortlist. The first version checked only
+       the release namespace, "keda" and "kube-system", which misses a KEDA
+       installed anywhere else — and missing it is the whole failure this guard
+       exists to prevent, since two operators reconciling the same
+       ScaledObjects is silent and miserable to diagnose. */}}
+{{- $all := lookup "apps/v1" "Deployment" "" "" }}
+{{- range $dep := (($all).items | default list) }}
+  {{- if eq $dep.metadata.name "keda-operator" }}
+  {{- $ns := $dep.metadata.namespace }}
   {{- if $dep }}
     {{- $ann := $dep.metadata.annotations | default dict }}
     {{- if and (eq (get $ann "meta.helm.sh/release-name") $.Release.Name) (eq (get $ann "meta.helm.sh/release-namespace") $.Release.Namespace) }}
@@ -24,6 +31,7 @@ installs only — it cannot be relied on as a rendering-time check.
     {{- else }}
       {{- $foundIn = $ns }}
     {{- end }}
+  {{- end }}
   {{- end }}
 {{- end }}
 {{- if and $foundIn (not $ownedByUs) }}

@@ -101,7 +101,12 @@ export default async function ModelsPage() {
                       <span className="text-gray-3 mx-1">/</span>
                       <span>{m.replicas.length}</span>
                     </p>
-                    <p className="text-[10px] text-gray-2 font-mono">min {m.minReplicas} · max {m.maxReplicas}</p>
+                    <p className="text-[10px] text-gray-2 font-mono">
+                      min {m.minReplicas} · max {m.maxReplicas}
+                      {m.scaling?.state === "active" && m.scaling.currentMetric !== null ? (
+                        <> · demand {m.scaling.currentMetric}</>
+                      ) : null}
+                    </p>
                   </div>
                 </div>
               </div>

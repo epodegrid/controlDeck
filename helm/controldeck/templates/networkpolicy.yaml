@@ -1,0 +1,62 @@
+{{- if .Values.networkPolicy.enabled }}
+# Ingress rules for the router, for clusters that default-deny.
+#
+# A locked-down cluster — the kind this platform is built for — commonly has a
+# deny-all NetworkPolicy per namespace. Everything then works except the two
+# things that arrive from *outside* the namespace, and both fail silently:
+#
+#   KEDA's metrics apiserver polls /metrics/keda/:model. Blocked, the HPA shows
+#   `<unknown>` for its target and the fleet never scales. Nothing logs an
+#   error, because from the router's side no request ever arrived.
+#
+#   The ingress controller reaches the dashboard and the API. Blocked, the
+#   whole thing is simply unreachable, which at least announces itself.
+#
+# Off by default: a NetworkPolicy in a namespace with no other policies is a
+# *restriction*, not a permission, so creating one uninvited would break a
+# cluster that was working fine.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "controldeck.fullname" . }}-allow-ingress
+  labels:
+    {{- include "controldeck.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: controldeck
+  policyTypes:
+    - Ingress
+  ingress:
+    # Within the release: router → model replicas, dashboard → router,
+    # everything → Postgres.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: controldeck
+    {{- with .Values.networkPolicy.kedaNamespace }}
+    # KEDA's metrics apiserver, which lives in its own namespace and must reach
+    # the router's metric endpoint or nothing scales.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.router.port }}
+    {{- end }}
+    {{- with .Values.networkPolicy.ingressControllerNamespace }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $.Values.router.port }}
+        - protocol: TCP
+          port: {{ $.Values.dashboard.port }}
+    {{- end }}
+    {{- with .Values.networkPolicy.extraIngress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

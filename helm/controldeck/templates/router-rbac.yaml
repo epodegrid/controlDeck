@@ -41,6 +41,17 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["pods"]
     verbs: ["get", "list"]
+  # Autoscaling status, so the dashboard can say why a model is not scaling.
+  # It is the one feature that fails completely silently — the ScaledObject
+  # reports Ready, the metric endpoint answers, and nothing moves — and the
+  # alternative is asking an operator to run kubectl against production.
+  # Read-only: KEDA owns scaling, the router only reports on it.
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects"]
+    verbs: ["get", "list"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

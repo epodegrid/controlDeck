@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { getPool } from "../../db/pool.js";
 import { listModels, listReplicasForModel, setModelOverride } from "../../registry/index.js";
 import { getUpstreamCheck } from "../../registry/verify-upstream.js";
+import { getScalingStatus } from "../../scaling/status.js";
 import { getCostBreakdown } from "../../cost/index.js";
 import { getAuditEntries, isContentLoggingEnabled, setLoggingScope, deleteAuditHistory } from "../../audit/index.js";
 
@@ -96,6 +97,9 @@ export function registerDashboardRoutes(app: FastifyInstance) {
         replicas: await listReplicasForModel(m.id),
         // Null until the reconciler has reached this model's backend once.
         upstreamCheck: getUpstreamCheck(m.id),
+        // Read from the cluster, because autoscaling fails silently and the
+        // alternative is asking someone to run kubectl in production.
+        scaling: await getScalingStatus(m.backendModelId),
       }))
     );
     return withReplicas;

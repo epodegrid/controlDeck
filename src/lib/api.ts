@@ -67,6 +67,16 @@ export type ModelWithReplicas = {
    * reconciler has reached this model's backend once; "unknown" where the
    * backend offers no model listing to check against.
    */
+  /** What KEDA is doing for this model, read from the cluster. */
+  scaling: {
+    state: "active" | "not_reconciled" | "metric_unreadable" | "absent" | "unknown";
+    detail: string;
+    minReplicas: number | null;
+    maxReplicas: number | null;
+    desiredReplicas: number | null;
+    currentMetric: number | null;
+    triggerUrl: string | null;
+  } | null;
   upstreamCheck:
     | { state: "ok" }
     | { state: "unknown"; detail: string }

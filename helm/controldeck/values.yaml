@@ -135,6 +135,23 @@ keda:
   #   webhooks:
   #     repository: ghcr.io/kedacore/keda-admission-webhooks
 
+# Ingress rules for clusters that default-deny traffic between namespaces.
+#
+# Off by default, because creating a NetworkPolicy where none existed is a
+# restriction rather than a permission and would break a working cluster.
+# Enable it where a deny-all policy is already in force — the symptom is KEDA's
+# HPA showing `<unknown>` for its target while everything inside the namespace
+# behaves perfectly.
+networkPolicy:
+  enabled: false
+  # Namespace KEDA runs in. Its metrics apiserver must reach the router's
+  # metric endpoint, or the fleet never scales.
+  kedaNamespace: keda
+  # Namespace of the ingress controller, so the dashboard and API are reachable.
+  ingressControllerNamespace: ingress-nginx
+  # Anything else, appended verbatim to the ingress rules.
+  extraIngress: []
+
 # Postgres is deployed by this chart from the official image rather than by a
 # third-party subchart — see templates/postgres.yaml for why.
 postgresql:

@@ -2,7 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- **The dashboard says why a model is not autoscaling.** The router reads the
+  ScaledObject and the HPA and reports one of: KEDA has not created an HPA
+  (the operator is not processing it — usually `watchNamespace` set elsewhere),
+  the HPA cannot read the metric, no ScaledObject exists, or scaling normally
+  with the current demand figure. It also shows the URL KEDA was told to poll,
+  because KEDA's own HPA condition stops at "encountered error" and never says
+  what failed — the address is the one thing an operator can check by eye.
+
+  This exists because diagnosing it otherwise means running kubectl against a
+  production cluster, which is not always possible. Read-only; a missing RBAC
+  rule reports "unknown" rather than taking the page down. Both failure states
+  were verified by reproducing them in a cluster.
+
+- **`networkPolicy.enabled`.** A locked-down cluster commonly default-denies
+  between namespaces, and then everything works except KEDA's metrics
+  apiserver reaching the router — the HPA shows `<unknown>` and the fleet never
+  scales, silently. Off by default, since creating a NetworkPolicy where none
+  existed is a restriction rather than a permission.
+
 ### Fixed
+
+- **The KEDA preflight guard only looked in three namespaces.** It checked the
+  release namespace, `keda` and `kube-system`, so an operator installed
+  anywhere else was missed — and missing it is the entire failure the guard
+  exists to prevent. It now scans every namespace.
 
 - **CPU, memory and restart count were hardcoded placeholders.** The monitoring
   view showed "—" with "requires K8s metrics API, not wired in this build", and
