@@ -31,6 +31,26 @@ describe("isContentLoggingEnabled", () => {
   beforeEach(resetScopes);
   afterEach(resetScopes);
 
+  it("keys the global scope by the empty string whatever the caller sends", async () => {
+    // Two dashboard pages disagreed about this: one wrote ("global", ""), the
+    // other ("global", "global"). Only the first is what isContentLoggingEnabled
+    // reads, so the second was a switch that moved, persisted and did nothing,
+    // and the pages showed different answers for one setting.
+    await setLoggingScope("global", "global", true);
+
+    const { rows: globals } = await getPool().query<{ scope_key: string; enabled: boolean }>(
+      `SELECT scope_key, enabled FROM audit_logging_config WHERE scope_type = 'global'`
+    );
+    expect(globals).toHaveLength(1);
+    expect(globals[0].scope_key).toBe("");
+    expect(globals[0].enabled).toBe(true);
+
+    // And it is the row that actually gates content logging.
+    expect(await isContentLoggingEnabled({ team: "nobody", modelId: "nothing" })).toBe(true);
+
+    await setLoggingScope("global", "", false);
+  });
+
   it("returns false when all scopes are off", async () => {
     const result = await isContentLoggingEnabled({ team, modelId, apiKey });
     expect(result).toBe(false);

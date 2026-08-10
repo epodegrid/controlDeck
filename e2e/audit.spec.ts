@@ -111,6 +111,46 @@ test.describe("audit", () => {
     await restored;
   });
 
+  test("the settings page's full-prompt switch is the same setting as the audit page's", async ({ page }) => {
+    // These two write the same global scope. One of them used the key "global"
+    // and the other "", so the switch moved, persisted, and gated nothing —
+    // and the two pages disagreed about one setting.
+    await page.goto("/settings");
+    const settingsToggle = page.getByRole("switch").first();
+    await expect(settingsToggle).toBeVisible();
+    const before = await settingsToggle.getAttribute("aria-checked");
+
+    const saved = page.waitForResponse(
+      (r) => r.url().includes("/api/audit/logging-config") && r.request().method() === "PUT"
+    );
+    await settingsToggle.click();
+    expect((await saved).ok()).toBe(true);
+    const expected = before === "true" ? "false" : "true";
+    await expect(settingsToggle).toHaveAttribute("aria-checked", expected);
+
+    // The audit page must now agree, having read the same row. Reloaded rather
+    // than only navigated: Next serves the client router cache for a recent
+    // page, which would show the state from before the write and make this
+    // fail for a reason that has nothing to do with the setting.
+    await page.goto("/audit");
+    await page.reload();
+    const auditGlobal = page.getByRole("switch").first();
+    await expect(auditGlobal).toHaveAttribute("aria-checked", expected);
+
+    // Put it back, from the other page, and confirm settings follows.
+    const restored = page.waitForResponse((r) =>
+      r.url().includes("/api/audit/logging-config")
+    );
+    await auditGlobal.click();
+    await restored;
+    await page.goto("/settings");
+    await page.reload();
+    await expect(page.getByRole("switch").first()).toHaveAttribute(
+      "aria-checked",
+      before ?? "false"
+    );
+  });
+
   test("delete history removes rows and reports how many", async ({ page }) => {
     await page.goto("/audit");
 

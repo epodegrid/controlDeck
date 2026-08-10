@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.2
+
+### Fixed
+
+- **"Log full prompt + response body" wrote a row nothing reads.** The global
+  content-logging scope is keyed by the empty string, which is what the gate
+  checks — but the audit page sent `"global"` as the key while the settings
+  page sent `""`. On a fresh install, with no seeded rows, the audit page's
+  switch moved, persisted, and gated nothing, and the two pages then showed
+  different answers for the same setting.
+
+  The key is now normalised server-side, so no caller can get it wrong, and a
+  migration collapses any stray row onto the real one — keeping it enabled if
+  either was, since an operator who turned content logging on should not have
+  it silently turn off on upgrade.
+
 ## 0.5.1
 
 The NetworkPolicy shipped in 0.5.0 did not work. Tested against a real

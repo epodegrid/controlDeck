@@ -125,7 +125,10 @@ export default async function AuditPage({
             label="Global default"
             on={globalScope?.enabled ?? false}
             scopeType="global"
-            scopeKey={globalScope?.scopeKey ?? "global"}
+            // The global scope is keyed by the empty string; "global" looks
+            // natural and writes a row nothing reads. Normalised server-side
+            // too, so neither page can get it wrong again.
+            scopeKey={globalScope?.scopeKey ?? ""}
             description="Apply to all requests, override-able below"
           />
           {/* Summaries, not switches. These were bound to teamScopes[0] and
