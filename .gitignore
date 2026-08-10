@@ -1,49 +1,62 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-!.env.example
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-# Production Folders (never committed)
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-# cluster cannot reach a chart repository at install time, so KEDA has to ship
-# compiled server output
-# debug
-# dependencies
-# env files — real ones stay local, the documented template is committed
-# helm — the lock and the vendored subchart are both committed. An air-gapped
-# in the tree rather than be fetched by `helm dependency update` on the way in.
-# misc
-# next.js
-# playwright
-# production
+
 # testing
-# typescript
-# vercel
-*.pem
-*.tsbuildinfo
-.DS_Store
-.claude
-.env*
-.pnp.*
-.pnpm-debug.log*
-.vercel
-.yarn/*
-/.next/
-/.playwright-mcp/
-/.pnp
-/blob-report/
-/build
 /coverage
+
+# next.js
+/.next/
 /out/
-/playwright-report/
-/test-results/
-deployment/test-model/models/
-next-env.d.ts
-node_modules
-npm-debug.log*
-production/
+
+# production
+/build
+
+# compiled server output
 server/dist/
-test-model/models/
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
+
+# env files — real ones stay local, the documented template is committed
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+.claude
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/.playwright-mcp/
+
+# helm — the lock and the vendored subchart are both committed. An air-gapped
+# cluster cannot reach a chart repository at install time, so KEDA has to ship
+# in the tree rather than be fetched by `helm dependency update` on the way in.
+
+# Production Folders (never committed)
+production/
+deployment/
+# The test model's weights: 409 MB, fetched and digest-verified by
+# test-model/fetch-weights.sh. The image bakes them in; the repo does not.
+test-model/models/
