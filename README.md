@@ -68,6 +68,21 @@ Forwarded verbatim to the model server: `tools`, `tool_choice`, `temperature`,
 `max_tokens` to bound cost, gets it — the gateway has no opinion on sampling
 and must not silently substitute its own.
 
+### Connecting clients without hourly interruptions
+
+Entra access tokens live 60–90 minutes, and most OpenAI-compatible tools hold
+one static key for a whole session — so they fail an hour into the work.
+[docs/client-authentication.md](docs/client-authentication.md) covers the three
+client classes: laptop tools via a local token broker, multi-user platforms
+(LibreChat) via On-Behalf-Of so the audit trail names the human, and headless
+workloads (Coder agents) via workload identity federation with no secret at
+all. [docs/architecture.md](docs/architecture.md) has the diagrams and the five
+different clocks that govern a request.
+
+Worth knowing up front: an expiring token never interrupts a request already in
+flight. Authentication runs once, when the request arrives, so a long
+generation completes regardless.
+
 ### Is the gateway or the model at fault?
 
 Append `?dry_run=1` to a chat completion. The gateway returns the exact body it
