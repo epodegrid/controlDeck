@@ -142,6 +142,15 @@ export type StreamChatParams = {
    * above reports success.
    */
   systemPromptMode?: "passthrough" | "merge";
+  /**
+   * Aborts the upstream request.
+   *
+   * §6.5's timeouts previously only wrote to the database: the row said
+   * `stall_timeout` while the connection stayed open and the caller waited on
+   * a model that might never answer. The audit trail and reality disagreed,
+   * and the caller's own client eventually gave up with no explanation.
+   */
+  signal?: AbortSignal;
   /** Forwarded verbatim; llama-swap owns the tool-calling handling (§6.12). */
   tools?: unknown[];
   toolChoice?: unknown;
@@ -282,6 +291,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(requestBody),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (!res.ok) {
       // Surface the backend's standardized error instead of silently yielding

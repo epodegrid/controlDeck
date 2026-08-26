@@ -27,6 +27,9 @@ router:
     ENTRA_AUDIENCE: "api://llm-gateway"
     ENTRA_ISSUER: ""
     STALL_TIMEOUT_MS: "60000"
+    # Largest request body accepted. Fastify defaults to 1 MiB, which rejects
+    # an agent compacting its history — the one request it cannot retry.
+    BODY_LIMIT_BYTES: "33554432"
     QUEUE_TIMEOUT_MS: "300000"
     USE_FAKE_ADAPTERS: "false"
 

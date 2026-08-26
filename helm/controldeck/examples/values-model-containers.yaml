@@ -100,6 +100,12 @@ router:
     # ten requests while still tracking a replica that genuinely slows down.
     TOKENS_PER_SEC_ALPHA: "0.3"
 
+    # Largest request body accepted, 32 MB. Must be at least as large as the
+    # ingress `proxy-body-size` above — a gateway that accepts less than its
+    # own ingress passes is a trap, and the request it rejects is an agent
+    # sending its whole conversation to be summarised.
+    BODY_LIMIT_BYTES: "33554432"
+
     # Never true here. It disables real model calls entirely.
     USE_FAKE_ADAPTERS: "false"
 

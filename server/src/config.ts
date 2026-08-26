@@ -39,6 +39,19 @@ export const config = {
    * one as an optional claim — `department` is the usual choice.
    */
   teamClaim: process.env.TEAM_CLAIM ?? "department",
+  /**
+   * Largest request body accepted, in bytes.
+   *
+   * Fastify defaults to 1 MiB, which is fine for a chat turn and far too small
+   * for the traffic this gateway actually carries. An agent compacting its
+   * history sends the entire conversation in one request; a vision request
+   * carries base64 images. Both routinely exceed a megabyte, and the rejection
+   * lands on precisely the request an agent cannot simply retry.
+   *
+   * 32 MiB by default, matching the ingress annotation in the worked example —
+   * a gateway that accepts less than its own ingress passes is a trap.
+   */
+  bodyLimitBytes: Number(process.env.BODY_LIMIT_BYTES ?? 32 * 1024 * 1024),
 };
 
 let devSigningKey: { privateKey: KeyLike; jwks: { keys: JWK[] } } | null = null;

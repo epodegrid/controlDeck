@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.6
+
+Compaction still failing, from the other end: the summary request is the
+largest and slowest an agent ever sends, and two gateway defaults were sized
+for a chat turn.
+
+### Fixed
+
+- **Requests over 1 MiB were rejected.** Fastify's default `bodyLimit` is one
+  megabyte, and nothing overrode it. A compaction request carries the entire
+  conversation in one call, so it is the single request most likely to exceed
+  that — and it arrived as a raw `FST_ERR_CTP_BODY_TOO_LARGE`, which is not an
+  OpenAI error at all, so a client saw an unparseable shape rather than a
+  reason. The limit is now 32 MB (`BODY_LIMIT_BYTES`), matching the ingress
+  annotation in the worked example, and a body that genuinely is too large
+  returns the standard error shape naming the setting to change.
+
+- **The generation timeouts never reached the live request.** §6.5's clocks
+  were enforced only by periodic sweeps, which mark database rows and cannot
+  touch a connection that is already open. A model stuck in prompt evaluation
+  — which is what a near-full context window causes — left the caller waiting
+  indefinitely while the row read `stall_timeout`, until the client gave up on
+  its own with nothing to explain why.
+
+  Both clocks now abort the upstream request: the caller gets `504` naming
+  which clock ran out and what to change, and the audit trail matches what
+  actually happened.
+
+- **A failure's recorded status depended on which code path noticed it.** The
+  mapping from error code to request status was a chain of ternaries covering
+  two codes, so a stall timeout enforced on the live request was filed as
+  `error` while the sweep filed the identical failure as `stall_timeout`.
+
 ## 0.5.5
 
 Compaction is the agent's job — controlDeck is stateless and holds no

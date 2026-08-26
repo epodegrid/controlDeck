@@ -44,6 +44,38 @@ afterAll(async () => {
 });
 
 describe("HTTP API", () => {
+  it("accepts a body far larger than Fastify's 1 MiB default", async () => {
+    // An agent compacting its history sends the whole conversation at once,
+    // and a vision request carries base64 images. Both routinely exceed a
+    // megabyte, and the rejection lands on exactly the request an agent cannot
+    // simply retry — it arrived as a raw Fastify 413 that no OpenAI client
+    // understands.
+    const big = "word ".repeat(400_000); // ~2 MB
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { model: "kestrel-9b", messages: [{ role: "user", content: big }], max_tokens: 5 },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("explains a body that really is too large, in the OpenAI error shape", async () => {
+    const huge = "word ".repeat(9_000_000); // ~45 MB, past the 32 MB limit
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { model: "kestrel-9b", messages: [{ role: "user", content: huge }] },
+    });
+
+    expect(res.statusCode).toBe(413);
+    const out = JSON.parse(res.body);
+    // Not Fastify's own envelope, which a client cannot parse as an error.
+    expect(out.error.type).toBe("invalid_request_error");
+    expect(out.error.message).toContain("BODY_LIMIT_BYTES");
+  });
+
   it("reports the backend's own token counts, not an estimate", async () => {
     // The fake adapter reports no usage, so this asserts the fallback path is
     // still coherent; the accuracy of the measured path is covered against a

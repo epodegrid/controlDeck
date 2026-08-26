@@ -11,6 +11,8 @@ import {
   completeRequest,
   expireQueuedRequest,
   QUEUE_TIMEOUT_MS,
+  STALL_TIMEOUT_MS,
+  FIRST_TOKEN_TIMEOUT_MS,
 } from "../../scheduler/index.js";
 import { computeCost, getCostConfigForModel } from "../../cost/index.js";
 import { isContentLoggingEnabled, recordAuditContent } from "../../audit/index.js";
@@ -25,7 +27,7 @@ import {
   invalidRequest,
   contextLengthExceeded,
 } from "../errors.js";
-import type { ChatCompletionRequest, StandardError } from "../../types.js";
+import type { ChatCompletionRequest, StandardError, ModelConfig } from "../../types.js";
 import { createAuthPreHandler } from "../auth-middleware.js";
 import { affinityKeyFor } from "../../scheduler/affinity.js";
 import { writeSseHead } from "../sse.js";
@@ -34,11 +36,26 @@ import type { JWKSSource } from "../../auth/index.js";
 const PLACEMENT_RETRY_MS = 200;
 
 /** Marks a request row as terminally failed with a given standard error code (not covered by the queue module's own timeout sweepers). */
+/**
+ * Request statuses the schema accepts, and which error code maps to each.
+ *
+ * Anything unlisted is recorded as the generic `error`. This was a chain of
+ * ternaries covering two codes, so a stall timeout enforced on the live
+ * request was filed as `error` while the periodic sweep filed the identical
+ * failure as `stall_timeout` — the same event, two names, depending on which
+ * code path noticed it first.
+ */
+const STATUS_FOR_ERROR_CODE: Record<string, string> = {
+  queue_timeout: "queue_timeout",
+  stall_timeout: "stall_timeout",
+  replica_unavailable: "replica_unavailable",
+};
+
 async function failRequest(requestId: string, err: StandardError, replicaId: string | null): Promise<void> {
   const pool = getPool();
   await pool.query(
     `UPDATE requests SET status = $2, error_code = $3, completed_at = now() WHERE id = $1`,
-    [requestId, err.error.code === "queue_timeout" ? "queue_timeout" : err.error.code === "replica_unavailable" ? "replica_unavailable" : "error", err.error.code]
+    [requestId, STATUS_FOR_ERROR_CODE[err.error.code] ?? "error", err.error.code]
   );
   if (replicaId) {
     await pool.query(`UPDATE replicas SET in_flight = GREATEST(0, in_flight - 1) WHERE id = $1`, [replicaId]);
@@ -128,6 +145,83 @@ function resolveUsage(
     };
   }
   return { promptTokens: estimatedPrompt, completionTokens: countedCompletion, measured: false };
+}
+
+/**
+ * Enforces §6.5's two generation clocks on the live request.
+ *
+ * The periodic sweeps mark rows in the database; they do not reach a
+ * connection that is already open. Without this the caller simply waits — the
+ * row reads `stall_timeout` while the request is still streaming, and the
+ * client eventually times out on its own with nothing to explain why.
+ *
+ * The first-token allowance is generous and the inactivity one is not, because
+ * they describe different things: silence while a model loads its weights is
+ * normal, and silence after it has started generating is a fault. The deadline
+ * therefore switches the moment the first token arrives.
+ */
+function generationDeadline(firstTokenMs: number, stallMs: number) {
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout;
+  let reason: "first_token" | "stall" = "first_token";
+
+  const arm = (ms: number) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), ms);
+    // Never keep the process alive for a timer whose only job is to give up.
+    timer.unref?.();
+  };
+  arm(firstTokenMs);
+
+  return {
+    signal: controller.signal,
+    /** Call on every token; switches to the inactivity clock and restarts it. */
+    sawToken() {
+      reason = "stall";
+      arm(stallMs);
+    },
+    get reason() {
+      return reason;
+    },
+    get aborted() {
+      return controller.signal.aborted;
+    },
+    done() {
+      clearTimeout(timer);
+    },
+  };
+}
+
+/**
+ * The error for a request that ran out of time, naming which clock ran out.
+ *
+ * Which one it was determines the remedy, so the message says: a first-token
+ * timeout on a large prompt is usually prompt evaluation being slower than the
+ * allowance, and an inactivity timeout means a replica stopped mid-answer.
+ */
+function timeoutError(reason: "first_token" | "stall", model: ModelConfig): StandardError {
+  if (reason === "first_token") {
+    const seconds = Math.round((model.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS) / 1000);
+    return {
+      error: {
+        type: "timeout_error",
+        code: "stall_timeout",
+        message:
+          `No first token within ${seconds}s. For a large prompt this is usually prompt ` +
+          `evaluation taking longer than the allowance — raise firstTokenTimeoutMs for ` +
+          `"${model.id}". For a cold start it is the model still loading its weights.`,
+      },
+    };
+  }
+  return {
+    error: {
+      type: "timeout_error",
+      code: "stall_timeout",
+      message:
+        `Generation stopped for more than ${Math.round(STALL_TIMEOUT_MS / 1000)}s. The replica ` +
+        `stopped producing tokens mid-answer.`,
+    },
+  };
 }
 
 async function waitForPlacement(
@@ -329,11 +423,16 @@ export function registerV1Routes(
         })}\n\n`
       );
 
+      const deadline = generationDeadline(
+        model.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS,
+        STALL_TIMEOUT_MS
+      );
       try {
         for await (const chunk of deps.llamaSwap.streamChat({
           endpointUrl: targetUrl,
           messages: body.messages,
           systemPrompt: model.systemPrompt,
+          signal: deadline.signal,
           ...sampling,
         })) {
           if (chunk.done) {
@@ -345,6 +444,7 @@ export function registerV1Routes(
           // keep the stall clock alive, and OpenAI bills them. Counting only
           // the answer would understate a thinking model's real cost.
           outputTokens += 1;
+          deadline.sawToken();
           if (chunk.toolCalls) toolCallLog.push(...chunk.toolCalls);
           else if (chunk.reasoning) fullReasoning += chunk.reasoning;
           else fullText += chunk.token;
@@ -435,10 +535,11 @@ export function registerV1Routes(
       } catch (err) {
         // Classified the same way as the non-streaming path: a caller error
         // must not reach the client as a retryable capacity failure.
-        const sseErr = backendFailure(err);
+        const sseErr = deadline.aborted ? timeoutError(deadline.reason, model) : backendFailure(err);
         reply.raw.write(`data: ${JSON.stringify(sseErr)}\n\n`);
         await failRequest(requestId, sseErr, placement.replicaId);
       } finally {
+        deadline.done();
         reply.raw.end();
       }
       return reply;
@@ -451,11 +552,16 @@ export function registerV1Routes(
     const toolCallDeltas: ToolCallDelta[] = [];
     let upstreamFinish: string | null = null;
     let upstreamUsage: UpstreamUsage | undefined;
+    const deadline = generationDeadline(
+      model.firstTokenTimeoutMs ?? FIRST_TOKEN_TIMEOUT_MS,
+      STALL_TIMEOUT_MS
+    );
     try {
       for await (const chunk of deps.llamaSwap.streamChat({
         endpointUrl: targetUrl,
         messages: body.messages,
         systemPrompt: model.systemPrompt,
+        signal: deadline.signal,
         ...sampling,
       })) {
         if (chunk.done) {
@@ -464,16 +570,19 @@ export function registerV1Routes(
           break;
         }
         outputTokens += 1;
+        deadline.sawToken();
         if (chunk.toolCalls) toolCallDeltas.push(...chunk.toolCalls);
         else if (chunk.reasoning) fullReasoning += chunk.reasoning;
         else fullText += chunk.token;
         await recordTokenEmitted(requestId);
       }
     } catch (err) {
-      const failErr = backendFailure(err);
+      const failErr = deadline.aborted ? timeoutError(deadline.reason, model) : backendFailure(err);
       await failRequest(requestId, failErr, placement.replicaId);
       reply.code(statusForError(failErr)).send(failErr);
       return;
+    } finally {
+      deadline.done();
     }
 
     const toolCalls = assembleToolCalls(toolCallDeltas);
