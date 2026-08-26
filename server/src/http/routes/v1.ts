@@ -17,7 +17,14 @@ import { isContentLoggingEnabled, recordAuditContent } from "../../audit/index.j
 import type { KedaClient } from "../../adapters/keda.js";
 import type { LlamaSwapClient, ToolCallDelta } from "../../adapters/llama-swap.js";
 import { BackendError, buildChatRequestBody } from "../../adapters/llama-swap.js";
-import { statusForError, replicaUnavailable, queueTimeoutError, invalidRequest } from "../errors.js";
+import type { UpstreamUsage } from "../../adapters/llama-swap.js";
+import {
+  statusForError,
+  replicaUnavailable,
+  queueTimeoutError,
+  invalidRequest,
+  contextLengthExceeded,
+} from "../errors.js";
 import type { ChatCompletionRequest, StandardError } from "../../types.js";
 import { createAuthPreHandler } from "../auth-middleware.js";
 import { affinityKeyFor } from "../../scheduler/affinity.js";
@@ -83,12 +90,44 @@ function auditBody(reasoning: string, text: string, toolCalls: unknown[]): strin
  * a request that cannot succeed.
  */
 function backendFailure(err: unknown): StandardError {
+  if (err instanceof BackendError && err.isContextOverflow) {
+    // Named specifically so an agent can compact its history and retry, which
+    // is the only client error here with an automatic remedy.
+    return contextLengthExceeded(err.message);
+  }
   if (err instanceof BackendError && err.isCallerError) {
     return invalidRequest(err.message);
   }
   return replicaUnavailable(
     err instanceof Error ? err.message : "Generation failed unexpectedly."
   );
+}
+
+/**
+ * Token counts for a completed turn.
+ *
+ * The backend's own numbers when it reports them, an estimate only when it does
+ * not. The estimate is `characters / 4` over the messages, which omits tool
+ * schemas entirely — measured against a real agent-shaped request it reported
+ * 272 prompt tokens where the model counted 1,822, an 85% under-report.
+ *
+ * That is not merely a billing inaccuracy. An agent decides when to compact its
+ * history from `usage.prompt_tokens`; told it has used a fifth of what it
+ * actually has, it never compacts and runs into a hard context error instead.
+ */
+function resolveUsage(
+  upstream: UpstreamUsage | undefined,
+  estimatedPrompt: number,
+  countedCompletion: number
+): { promptTokens: number; completionTokens: number; measured: boolean } {
+  if (upstream) {
+    return {
+      promptTokens: upstream.prompt_tokens,
+      completionTokens: upstream.completion_tokens,
+      measured: true,
+    };
+  }
+  return { promptTokens: estimatedPrompt, completionTokens: countedCompletion, measured: false };
 }
 
 async function waitForPlacement(
@@ -276,6 +315,7 @@ export function registerV1Routes(
       // still waiting for.
       const toolCallLog: unknown[] = [];
       let upstreamFinish: string | null = null;
+      let upstreamUsage: UpstreamUsage | undefined;
 
       // The spec opens a stream with the assistant role, which is how a client
       // knows which message the deltas belong to.
@@ -298,6 +338,7 @@ export function registerV1Routes(
         })) {
           if (chunk.done) {
             upstreamFinish = chunk.finishReason ?? null;
+            upstreamUsage = chunk.usage;
             break;
           }
           // Reasoning tokens are generated tokens: they cost compute, they
@@ -351,11 +392,35 @@ export function registerV1Routes(
             ],
           })}\n\n`
         );
+        // OpenAI sends a final usage-only chunk when the caller asks for one,
+        // and an agent tracking its context window mid-stream depends on it.
+        const usage = resolveUsage(
+          upstreamUsage,
+          Math.ceil(promptText.length / 4),
+          outputTokens
+        );
+        if ((body as { stream_options?: { include_usage?: boolean } }).stream_options?.include_usage) {
+          reply.raw.write(
+            `data: ${JSON.stringify({
+              id: requestId,
+              object: "chat.completion.chunk",
+              created,
+              model: model.id,
+              choices: [],
+              usage: {
+                prompt_tokens: usage.promptTokens,
+                completion_tokens: usage.completionTokens,
+                total_tokens: usage.promptTokens + usage.completionTokens,
+              },
+            })}\n\n`
+          );
+        }
         reply.raw.write("data: [DONE]\n\n");
 
         const costConfig = (await getCostConfigForModel(model.id)) ?? { costValue: model.costValue, costBasis: model.costBasis };
         const durationMs = Date.now() - startedAt;
-        const inputTokens = Math.ceil(promptText.length / 4);
+        const inputTokens = usage.promptTokens;
+        outputTokens = usage.completionTokens;
         const costUsd = computeCost({ costBasis: costConfig.costBasis, costValue: costConfig.costValue, inputTokens, outputTokens, durationMs });
         await getPool().query(`UPDATE requests SET input_tokens = $2 WHERE id = $1`, [requestId, inputTokens]);
         await completeRequest(requestId, { outputTokens, costUsd });
@@ -385,6 +450,7 @@ export function registerV1Routes(
     let fullReasoning = "";
     const toolCallDeltas: ToolCallDelta[] = [];
     let upstreamFinish: string | null = null;
+    let upstreamUsage: UpstreamUsage | undefined;
     try {
       for await (const chunk of deps.llamaSwap.streamChat({
         endpointUrl: targetUrl,
@@ -394,6 +460,7 @@ export function registerV1Routes(
       })) {
         if (chunk.done) {
           upstreamFinish = chunk.finishReason ?? null;
+          upstreamUsage = chunk.usage;
           break;
         }
         outputTokens += 1;
@@ -410,9 +477,11 @@ export function registerV1Routes(
     }
 
     const toolCalls = assembleToolCalls(toolCallDeltas);
+    const resolved = resolveUsage(upstreamUsage, Math.ceil(promptText.length / 4), outputTokens);
     const costConfig = (await getCostConfigForModel(model.id)) ?? { costValue: model.costValue, costBasis: model.costBasis };
     const durationMs = Date.now() - startedAt;
-    const inputTokens = Math.ceil(promptText.length / 4);
+    const inputTokens = resolved.promptTokens;
+    outputTokens = resolved.completionTokens;
     const costUsd = computeCost({ costBasis: costConfig.costBasis, costValue: costConfig.costValue, inputTokens, outputTokens, durationMs });
     await getPool().query(`UPDATE requests SET input_tokens = $2 WHERE id = $1`, [requestId, inputTokens]);
     await completeRequest(requestId, { outputTokens, costUsd });

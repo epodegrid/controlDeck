@@ -182,6 +182,47 @@ suite("against a real llama-swap container", () => {
     expect(text.length).toBeGreaterThan(0);
   }, LOAD_TIMEOUT);
 
+  it("reports the model's own token counts, including the tools", async () => {
+    // The gateway used to estimate this as characters/4 over the messages,
+    // which omits tool schemas entirely: measured against an agent-shaped
+    // request it reported 272 prompt tokens where the model counted 1,822.
+    // An agent decides when to compact its history from this number.
+    const tools = Array.from({ length: 8 }, (_, i) => ({
+      type: "function",
+      function: {
+        name: `tool_${i}`,
+        description: "A tool with a deliberately verbose description. ".repeat(12),
+        parameters: {
+          type: "object",
+          properties: { path: { type: "string", description: "x".repeat(200) } },
+          required: ["path"],
+        },
+      },
+    }));
+
+    let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
+    for await (const chunk of client.streamChat({
+      endpointUrl: BASE!,
+      model: "tiny:instruct",
+      messages: [
+        { role: "system", content: "You are an agent. ".repeat(60) },
+        { role: "user", content: "Say ok." },
+      ],
+      tools,
+      maxTokens: 8,
+      temperature: 0.1,
+    })) {
+      if (chunk.done) usage = chunk.usage;
+    }
+
+    expect(usage, "the backend reported no usage at all").toBeTruthy();
+
+    // The tool schemas alone are well over a thousand tokens, so a count that
+    // ignored them could not possibly reach this.
+    expect(usage!.prompt_tokens).toBeGreaterThan(1000);
+    expect(usage!.completion_tokens).toBeGreaterThan(0);
+  }, LOAD_TIMEOUT);
+
   it("tails the container's real log stream", async () => {
     // llama-swap serves /logs/stream; /logs is a one-shot history dump. Asking
     // for the mock model's shape found no `data:` frames and showed nothing.

@@ -27,15 +27,71 @@ export class BackendError extends Error {
     readonly status: number,
     readonly body: string
   ) {
-    super(`Model backend returned ${status}: ${body.slice(0, 300)}`);
+    super(`Model backend returned ${status}: ${BackendError.summarise(body)}`);
     this.name = "BackendError";
+  }
+
+  /**
+   * The backend's own sentence, not its JSON envelope.
+   *
+   * These messages are read by people and matched by agents, and
+   * `{"error":{"code":400,"message":"request (40013 tokens) exceeds…` buries
+   * the part that says what went wrong inside two levels of wrapper.
+   */
+  static summarise(body: string): string {
+    try {
+      const parsed = JSON.parse(body);
+      const message = parsed?.error?.message ?? parsed?.message ?? parsed?.error;
+      if (typeof message === "string" && message.trim()) return message.slice(0, 300);
+    } catch {
+      // Not JSON; the raw body is the best available.
+    }
+    return body.slice(0, 300);
   }
 
   /** True when the request itself is at fault and retrying cannot help. */
   get isCallerError(): boolean {
     return this.status >= 400 && this.status < 500;
   }
+
+  /**
+   * True when the prompt did not fit the model's context window.
+   *
+   * Detected from the body rather than the status, because every backend
+   * spells it differently: llama.cpp raises `exceed_context_size_error`, vLLM
+   * and others describe it in prose. Both shapes are matched so the caller
+   * gets a code it can act on either way.
+   */
+  get isContextOverflow(): boolean {
+    const body = this.body.toLowerCase();
+
+    // Named codes, where a backend provides one.
+    if (body.includes("exceed_context_size_error")) return true; // llama.cpp
+    if (body.includes("context_length_exceeded")) return true; // OpenAI, and clones
+
+    // Otherwise it is prose, and every backend words it differently. vLLM says
+    // "This model's maximum context length is 8192 tokens. However, your
+    // messages resulted in 9000 tokens." — which contains none of the verbs a
+    // naive matcher looks for, so the phrases are matched too.
+    if (body.includes("maximum context length")) return true;
+    if (body.includes("context window")) return true;
+
+    return (
+      (body.includes("context") || body.includes("n_ctx")) &&
+      (body.includes("exceed") ||
+        body.includes("too long") ||
+        body.includes("larger than") ||
+        body.includes("reduce the length"))
+    );
+  }
 }
+
+/** Token counts as the backend actually measured them. */
+export type UpstreamUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
 
 export type ChatToken = {
   token: string;
@@ -53,6 +109,15 @@ export type ChatToken = {
   toolCalls?: ToolCallDelta[];
   /** Upstream's own reason, notably "tool_calls". Present on the done frame. */
   finishReason?: string | null;
+  /**
+   * The backend's own token counts, when it reports them. Present on the done
+   * frame.
+   *
+   * These matter beyond billing: an agent decides when to compact its history
+   * from `usage.prompt_tokens`, so a number the gateway invented rather than
+   * measured leads it to run out of context instead of summarising in time.
+   */
+  usage?: UpstreamUsage;
 };
 
 /**
@@ -174,6 +239,9 @@ export function buildChatRequestBody(params: StreamChatParams): Record<string, u
     ...(params.model ? { model: params.model } : {}),
     messages: outgoing,
     stream: true,
+    // Without this a streaming response carries no usage at all, and the
+    // gateway is left guessing at token counts it could simply be told.
+    stream_options: { include_usage: true },
     // §6.12 is explicit that tool calling is a pass-through of the
     // backend's own handling. Dropping these was silently worse than
     // rejecting them: the router filters on the `tools` capability and
@@ -229,6 +297,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let finishReason: string | null = null;
+    let usage: UpstreamUsage | undefined;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -237,12 +306,24 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (data === "[DONE]") {
-          yield { token: "", done: true, finishReason };
+          yield { token: "", done: true, finishReason, usage };
           return;
         }
         try {
           const parsed = JSON.parse(data);
           const delta = parsed.choices?.[0]?.delta;
+
+          // The usage frame carries no choices, so it must be read before
+          // anything reaches into delta.
+          if (parsed.usage && typeof parsed.usage.prompt_tokens === "number") {
+            usage = {
+              prompt_tokens: parsed.usage.prompt_tokens,
+              completion_tokens: parsed.usage.completion_tokens ?? 0,
+              total_tokens:
+                parsed.usage.total_tokens ??
+                parsed.usage.prompt_tokens + (parsed.usage.completion_tokens ?? 0),
+            };
+          }
 
           const token = delta?.content ?? "";
           const reasoning = delta?.reasoning_content ?? "";
@@ -285,7 +366,7 @@ export class HttpLlamaSwapClient implements LlamaSwapClient {
         }
       }
     }
-    yield { token: "", done: true, finishReason };
+    yield { token: "", done: true, finishReason, usage };
   }
 
   async embed(params: { endpointUrl: string; input: string | string[]; model?: string }): Promise<number[][]> {

@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.5.5
+
+Compaction is the agent's job — controlDeck is stateless and holds no
+conversation — but two things it reported were wrong in ways that stopped an
+agent from doing that job.
+
+### Fixed
+
+- **`usage.prompt_tokens` was invented, not measured.** It was estimated as
+  message characters divided by four, which omits tool schemas completely.
+  Against an agent-shaped request the gateway reported **272 prompt tokens
+  where the model counted 1,822** — an 85% under-report. An agent decides when
+  to compact its history from that number, so it believed it had five times the
+  headroom it had, never compacted, and ran into a hard context error instead.
+
+  The backend's own counts are now used wherever it reports them
+  (`stream_options: {include_usage: true}` is sent upstream, since llama.cpp
+  emits no usage while streaming without it), falling back to the estimate only
+  for backends that report none. This also corrects cost tracking (§6.7), which
+  was understating tool-heavy traffic by the same factor.
+
+- **A context overflow returned a code no agent recognises.** It came back as
+  the generic `invalid_request`; OpenAI's `context_length_exceeded` is what
+  clients branch on to summarise and retry. Detected from the backend's own
+  error — llama.cpp raises `exceed_context_size_error`, vLLM says "maximum
+  context length", others differ again — so the caller gets an actionable code
+  whichever backend is behind it.
+
+- **Backend errors quoted their JSON envelope.** `Model backend returned 400:
+  {"error":{"code":400,"message":"request (40013 tokens) exceeds…` now reads
+  `Model backend returned 400: request (40013 tokens) exceeds the available
+  context size (32768 tokens)`.
+
+### Added
+
+- **A usage chunk for streaming callers that ask for one.** OpenAI sends a
+  final usage-only chunk when `stream_options.include_usage` is set, and an
+  agent tracking its context window mid-stream depends on it.
+
 ## 0.5.4
 
 ### Added

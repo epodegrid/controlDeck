@@ -22,7 +22,12 @@ export type ErrorCode =
   | "replica_unavailable"
   | "capability_mismatch"
   | "auth_invalid"
-  | "invalid_request";
+  | "invalid_request"
+  // OpenAI's own code for a prompt that will not fit. Agents branch on this
+  // exact string to decide when to compact their history, so returning the
+  // generic invalid_request leaves them unable to tell "summarise and retry"
+  // from "this request is malformed".
+  | "context_length_exceeded";
 
 export type StandardError = {
   error: {

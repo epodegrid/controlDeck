@@ -249,6 +249,16 @@ as an optional claim on the app registration and set `TEAM_CLAIM` to match.
 **Sign-in works, but the broker says no refresh token.** `offline_access` is
 missing from the scope.
 
+**An agent never compacts, then dies of a context overflow.** Two gateway
+behaviours caused this and both are fixed in 0.5.5. Before it, `usage.prompt_tokens`
+was estimated from message characters and excluded tool schemas entirely —
+measured against an agent-shaped request it reported 272 where the model
+counted 1,822 — so an agent tracking its context window believed it had five
+times the headroom it did. And an overflow came back as the generic
+`invalid_request`, which no agent recognises as "summarise and retry". The
+gateway now passes through the model's own counts and returns
+`context_length_exceeded`.
+
 **Is it the gateway or my client?** Send the request with `?dry_run=1` — the
 gateway returns the exact body it would forward upstream without calling the
 model. See the README.

@@ -11,6 +11,7 @@ export function statusForError(err: StandardError): number {
     case "capability_mismatch":
       return 422;
     case "invalid_request":
+    case "context_length_exceeded":
       return 400;
     case "queue_timeout":
     case "stall_timeout":
@@ -24,6 +25,19 @@ export function statusForError(err: StandardError): number {
 
 export function invalidRequest(message: string): StandardError {
   return { error: { type: "invalid_request_error", code: "invalid_request", message } };
+}
+
+/**
+ * A prompt that exceeds the model's context window.
+ *
+ * Kept distinct from invalid_request because it is the one client error with a
+ * remedy the caller can apply automatically: drop or summarise older turns and
+ * send again. Agents look for this exact code to do that.
+ */
+export function contextLengthExceeded(message: string): StandardError {
+  return {
+    error: { type: "invalid_request_error", code: "context_length_exceeded", message },
+  };
 }
 
 export function replicaUnavailable(message: string): StandardError {

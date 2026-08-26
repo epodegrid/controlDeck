@@ -44,6 +44,25 @@ afterAll(async () => {
 });
 
 describe("HTTP API", () => {
+  it("reports the backend's own token counts, not an estimate", async () => {
+    // The fake adapter reports no usage, so this asserts the fallback path is
+    // still coherent; the accuracy of the measured path is covered against a
+    // real container in real-model.test.ts. What matters here is that a
+    // usage object is always present and internally consistent — an agent
+    // reads it on every turn.
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/chat/completions",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { model: "kestrel-9b", messages: [{ role: "user", content: "hi" }] },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const out = JSON.parse(res.body);
+    expect(out.usage.prompt_tokens).toBeGreaterThan(0);
+    expect(out.usage.total_tokens).toBe(out.usage.prompt_tokens + out.usage.completion_tokens);
+  });
+
   it("dry_run returns the exact upstream body without calling the model", async () => {
     // The question this answers — "is the gateway dropping my system prompt, or
     // is the model ignoring it?" — has twice needed a packet capture between
